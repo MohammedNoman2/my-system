@@ -1,0 +1,1101 @@
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import List, Optional, Union
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from app.api.deps import get_current_user, require_booking_role
+from app.core.database import get_db
+from app.models.booking import Booking, BookingStatus, BookingType
+from app.models.booking_details import (
+    FlightBookingDetail,
+    ParcelBookingDetail,
+    PassportBookingDetail,
+    TransportBookingDetail,
+    VisaBookingDetail,
+)
+from app.models.customer import Customer
+from app.models.supplier import Supplier
+from app.models.accounting import Account, JournalEntry, JournalEntryLine
+from app.models.financial import EntityType, FinancialTransaction, PaymentMethod, TransactionType
+from app.models.settings import Settings
+from app.models.user import User, UserRole
+from app.schemas.booking import (
+    BookingAdminResponse,
+    BookingCancelRequest,
+    BookingCreate,
+    BookingEmployeeResponse,
+    BookingPostponeRequest,
+    BookingRerouteRequest,
+    TicketSearchItem,
+    TicketSearchResponse,
+)
+from app.services.counter_service import get_next_reference_number
+from app.services.print_service import generate_voucher_html, generate_voucher_pdf
+from app.services.accounting_service import (
+    AccountingMismatchException,
+    create_entity_accounts,
+    create_journal_entry,
+    get_account_by_code,
+    get_entity_account,
+    get_entity_balance,
+)
+from app.utils.audit import log_audit_event
+
+router = APIRouter(prefix="/bookings", tags=["Bookings"])
+
+PREFIX_MAP = {
+    BookingType.FLIGHT: "FL",
+    BookingType.TRANSPORT: "TR",
+    BookingType.VISA: "VI",
+    BookingType.PASSPORT: "PA",
+    BookingType.PARCEL: "PR",
+}
+
+
+def format_booking_response(full_booking: Booking, role: UserRole):
+    creator_name = full_booking.employee.full_name if full_booking.employee else "مدير النظام"
+    creator_id = full_booking.employee_id
+    if role == UserRole.EMPLOYEE:
+        resp = BookingEmployeeResponse.model_validate(full_booking)
+        resp.created_by_id = creator_id
+        resp.created_by_name = creator_name
+        return resp
+    resp = BookingAdminResponse.model_validate(full_booking)
+    resp.created_by_id = creator_id
+    resp.created_by_name = creator_name
+    return resp
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def create_booking(
+    data: BookingCreate,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    # Determine reference prefix and generate next reference number atomically
+    prefix = PREFIX_MAP.get(data.type, "BK")
+    ref_num = await get_next_reference_number(db, prefix)
+
+    # Resolve or create Customer
+    customer = None
+    if data.customer_id:
+        c_res = await db.execute(select(Customer).where(Customer.id == data.customer_id))
+        customer = c_res.scalar_one_or_none()
+
+    if not customer:
+        cust_name = ""
+        cust_phone = ""
+        cust_passport = None
+        cust_id = None
+        birth_date = None
+        birth_place = ""
+
+        if data.type == BookingType.FLIGHT and data.flight_details:
+            cust_name = data.flight_details.passenger_name
+            cust_phone = data.flight_details.passenger_phone
+            cust_passport = data.flight_details.passport_number
+            birth_date = data.flight_details.birth_date
+            birth_place = data.flight_details.birth_place
+        elif data.type == BookingType.TRANSPORT and data.transport_details:
+            cust_name = data.transport_details.passenger_name
+            cust_phone = data.transport_details.passenger_phone
+            cust_id = data.transport_details.id_number
+            birth_date = data.transport_details.birth_date
+            birth_place = data.transport_details.birth_place
+        elif data.type == BookingType.VISA and data.visa_details:
+            cust_name = data.visa_details.applicant_name
+            cust_phone = data.visa_details.applicant_phone
+            cust_passport = data.visa_details.passport_number
+            birth_date = data.visa_details.birth_date
+            birth_place = data.visa_details.birth_place
+        elif data.type == BookingType.PASSPORT and data.passport_details:
+            cust_name = data.passport_details.applicant_name
+            cust_phone = data.passport_details.applicant_phone
+            cust_id = data.passport_details.id_number
+            birth_date = data.passport_details.birth_date
+            birth_place = data.passport_details.birth_place
+        elif data.type == BookingType.PARCEL and data.parcel_details:
+            cust_name = data.parcel_details.sender_name
+            cust_phone = data.parcel_details.sender_phone
+
+        # Strict Hierarchy per Mandatory Directive:
+        # 1. Search exact match by national_id OR passport_number (if provided)
+        if cust_id:
+            c_res = await db.execute(select(Customer).where(Customer.id_number == cust_id))
+            customer = c_res.scalars().first()
+        if not customer and cust_passport:
+            c_res = await db.execute(select(Customer).where(Customer.passport_number == cust_passport))
+            customer = c_res.scalars().first()
+
+        # 2. If not found, search exact match by (phone AND full_name)
+        if not customer and cust_phone and cust_name:
+            c_res = await db.execute(
+                select(Customer).where(Customer.phone_number == cust_phone, Customer.name == cust_name)
+            )
+            customer = c_res.scalars().first()
+
+        # 3. If no exact match is found, provision a new Customer and generate dedicated ledger accounts (Account) for each currency
+        if not customer:
+            customer = Customer(
+                name=cust_name or "عميل حجز",
+                phone_number=cust_phone or f"TEMP-{ref_num}",
+                passport_number=cust_passport,
+                id_number=cust_id,
+                balance=Decimal("0.00"),
+            )
+            db.add(customer)
+            await db.flush()
+            # Generate dedicated sub-accounts for each currency
+            await create_entity_accounts(db, "customer", customer.id, customer.name)
+        else:
+            # Ensure entity sub-accounts exist
+            await create_entity_accounts(db, "customer", customer.id, customer.name)
+    else:
+        # Ensure entity sub-accounts exist
+        await create_entity_accounts(db, "customer", customer.id, customer.name)
+
+    remaining_amount = data.selling_price - data.paid_amount
+    if remaining_amount < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="المبلغ المدفوع أكبر من سعر البيع",
+        )
+
+    # Resolve Supplier (Support Manual Free-Text Entry with Ledger Account Auto-Creation)
+    resolved_supplier_id = data.supplier_id
+    if data.supplier_name and data.supplier_name.strip():
+        s_name = data.supplier_name.strip()
+        supp_res = await db.execute(
+            select(Supplier).where(func.lower(func.trim(Supplier.name)) == s_name.lower())
+        )
+        found_supp = supp_res.scalars().first()
+        if found_supp:
+            resolved_supplier_id = found_supp.id
+        else:
+            new_supp = Supplier(
+                name=s_name,
+                phone_number=f"77000{ref_num}",
+                service_type=data.type.value if hasattr(data.type, "value") else str(data.type),
+            )
+            db.add(new_supp)
+            await db.flush()
+            await create_entity_accounts(db, "supplier", new_supp.id, s_name)
+            resolved_supplier_id = new_supp.id
+
+    # Role check on cost_price
+    cost_price = data.cost_price if current_user.role != UserRole.EMPLOYEE else Decimal("0.00")
+
+    booking = Booking(
+        booking_id=ref_num,
+        ticket_number=ref_num,
+        type=data.type,
+        customer_id=customer.id,
+        employee_id=current_user.id,
+        cost_price=cost_price,
+        selling_price=data.selling_price,
+        paid_amount=data.paid_amount,
+        remaining_amount=remaining_amount,
+        currency=data.currency,
+        supplier_id=resolved_supplier_id,
+        notes=data.notes,
+        status=BookingStatus.PENDING,
+    )
+    db.add(booking)
+    await db.flush()
+
+    # Create sub-details
+    if data.type == BookingType.FLIGHT:
+        if not data.flight_details:
+            raise HTTPException(status_code=400, detail="بيانات رحلة الطيران مطلوبة")
+        fd = FlightBookingDetail(
+            booking_id=booking.id,
+            airline_company=data.flight_details.airline_company,
+            flight_number=data.flight_details.flight_number,
+            departure_airport=data.flight_details.departure_airport,
+            arrival_airport=data.flight_details.arrival_airport,
+            departure_date=data.flight_details.departure_date,
+            departure_time=data.flight_details.departure_time,
+            return_date=data.flight_details.return_date,
+            return_time=data.flight_details.return_time,
+            ticket_type=data.flight_details.ticket_type,
+            allowed_weight=data.flight_details.allowed_weight,
+            passenger_name=data.flight_details.passenger_name,
+            passenger_phone=data.flight_details.passenger_phone,
+            passport_number=data.flight_details.passport_number,
+            birth_date=data.flight_details.birth_date,
+            birth_place=data.flight_details.birth_place,
+            passport_image_url=data.flight_details.passport_image_url,
+        )
+        db.add(fd)
+
+    elif data.type == BookingType.TRANSPORT:
+        if not data.transport_details:
+            raise HTTPException(status_code=400, detail="بيانات النقل البري مطلوبة")
+        td = TransportBookingDetail(
+            booking_id=booking.id,
+            transport_company=data.transport_details.transport_company,
+            departure_station=data.transport_details.departure_station,
+            arrival_station=data.transport_details.arrival_station,
+            travel_date=data.transport_details.travel_date,
+            travel_time=data.transport_details.travel_time,
+            passenger_name=data.transport_details.passenger_name,
+            passenger_phone=data.transport_details.passenger_phone,
+            id_number=data.transport_details.id_number,
+            birth_date=data.transport_details.birth_date,
+            birth_place=data.transport_details.birth_place,
+            id_image_url=data.transport_details.id_image_url,
+        )
+        db.add(td)
+
+    elif data.type == BookingType.VISA:
+        if not data.visa_details:
+            raise HTTPException(status_code=400, detail="بيانات طلب التأشيرة مطلوبة")
+        vd = VisaBookingDetail(
+            booking_id=booking.id,
+            visa_type=data.visa_details.visa_type,
+            application_date=data.visa_details.application_date,
+            applicant_name=data.visa_details.applicant_name,
+            applicant_phone=data.visa_details.applicant_phone,
+            passport_number=data.visa_details.passport_number,
+            birth_date=data.visa_details.birth_date,
+            birth_place=data.visa_details.birth_place,
+            passport_image_url=data.visa_details.passport_image_url,
+        )
+        db.add(vd)
+
+    elif data.type == BookingType.PASSPORT:
+        if not data.passport_details:
+            raise HTTPException(status_code=400, detail="بيانات معاملة الجواز مطلوبة")
+        pd = PassportBookingDetail(
+            booking_id=booking.id,
+            passport_type=data.passport_details.passport_type,
+            priority=data.passport_details.priority,
+            application_date=data.passport_details.application_date,
+            expected_delivery_date=data.passport_details.expected_delivery_date,
+            applicant_name=data.passport_details.applicant_name,
+            applicant_phone=data.passport_details.applicant_phone,
+            id_number=data.passport_details.id_number,
+            birth_date=data.passport_details.birth_date,
+            birth_place=data.passport_details.birth_place,
+            id_image_url=data.passport_details.id_image_url,
+        )
+        db.add(pd)
+
+    elif data.type == BookingType.PARCEL:
+        if not data.parcel_details:
+            raise HTTPException(status_code=400, detail="بيانات شحن الطرد مطلوبة")
+        pld = ParcelBookingDetail(
+            booking_id=booking.id,
+            sender_name=data.parcel_details.sender_name,
+            sender_phone=data.parcel_details.sender_phone,
+            receiver_name=data.parcel_details.receiver_name,
+            receiver_phone=data.parcel_details.receiver_phone,
+            delivery_destination=data.parcel_details.delivery_destination,
+            parcel_type=data.parcel_details.parcel_type,
+            weight=data.parcel_details.weight,
+            content_description=data.parcel_details.content_description,
+            shipping_date=data.parcel_details.shipping_date,
+        )
+        db.add(pld)
+
+    # 3. Generate balanced Double-Entry JournalEntry
+    curr_str = data.currency or "YER"
+    je_ref = await get_next_reference_number(db, "JE")
+
+    cash_acc = await get_account_by_code(db, f"1101-{curr_str}")
+    cust_acc = await get_entity_account(db, "customer", customer.id, curr_str, customer.name)
+    sales_acc = await get_account_by_code(db, f"4101-{curr_str}")
+
+    je_lines = [
+        {"account_id": sales_acc.id, "debit": Decimal("0.0000"), "credit": data.selling_price},
+    ]
+    if data.paid_amount > 0:
+        je_lines.append({"account_id": cash_acc.id, "debit": data.paid_amount, "credit": Decimal("0.0000")})
+    if remaining_amount > 0:
+        je_lines.append({"account_id": cust_acc.id, "debit": remaining_amount, "credit": Decimal("0.0000")})
+
+    if cost_price > 0 and resolved_supplier_id:
+        cogs_acc = await get_account_by_code(db, f"5101-{curr_str}")
+        supp_acc = await get_entity_account(db, "supplier", resolved_supplier_id, curr_str)
+        je_lines.append({"account_id": cogs_acc.id, "debit": cost_price, "credit": Decimal("0.0000")})
+        je_lines.append({"account_id": supp_acc.id, "debit": Decimal("0.0000"), "credit": cost_price})
+
+    await create_journal_entry(
+        session=db,
+        entry_number=je_ref,
+        reference_type="BOOKING",
+        reference_id=ref_num,
+        currency=curr_str,
+        description=f"قيد حجز {ref_num} - {data.type.value} - العميل: {customer.name}",
+        lines_data=je_lines,
+    )
+
+    # Sync dynamic balance
+    customer.balance = await get_entity_balance(db, "customer", customer.id, curr_str)
+
+    # If paid_amount > 0, record receipt voucher
+    if data.paid_amount > 0:
+        rc_ref = await get_next_reference_number(db, "RC")
+        payment_record = FinancialTransaction(
+            transaction_id=rc_ref,
+            type=TransactionType.PAYMENT_IN,
+            entity_type=EntityType.CUSTOMER,
+            entity_id=customer.id,
+            amount=data.paid_amount,
+            currency=data.currency,
+            payment_method=PaymentMethod.CASH,
+            notes=f"دفعة حجز {ref_num}",
+            transaction_date=date.today(),
+            booking_id=booking.id,
+            created_by=current_user.id,
+        )
+        db.add(payment_record)
+
+    await log_audit_event(
+        db,
+        "INSERT",
+        "bookings",
+        user=current_user,
+        record_id=booking.id,
+        new_data={"booking_id": ref_num, "type": data.type.value, "selling_price": float(data.selling_price)},
+        request=request,
+    )
+
+    await db.commit()
+
+    # Re-fetch with relationships for output
+    stmt = (
+        select(Booking)
+        .where(Booking.id == booking.id)
+        .options(
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+            selectinload(Booking.supplier),
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.visa_details),
+            selectinload(Booking.passport_details),
+            selectinload(Booking.parcel_details),
+        )
+    )
+    res = await db.execute(stmt)
+    full_booking = res.scalar_one()
+
+    return format_booking_response(full_booking, current_user.role)
+
+
+@router.get("/unpaid")
+async def get_unpaid_bookings(
+    customer_id: int = Query(..., description="معرف العميل المطلوب جلب تذاكره المفتوحة"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    جلب التذاكر غير المسددة بالكامل لعميل محدد حصراً.
+    يُستخدم في سند القبض لعزل التذاكر وتخصيص السداد.
+    """
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.customer_id == customer_id,
+            Booking.remaining_amount > 0,
+            Booking.status.in_(["confirmed", "pending"]),
+        )
+        .options(selectinload(Booking.customer))
+        .order_by(Booking.booking_date)
+    )
+    res = await db.execute(stmt)
+    bookings = res.scalars().all()
+
+    return [
+        {
+            "id": b.id,
+            "ticket_number": b.ticket_number,
+            "type": b.type.value if hasattr(b.type, "value") else b.type,
+            "selling_price": float(b.selling_price),
+            "paid_amount": float(b.paid_amount),
+            "remaining_amount": float(b.remaining_amount),
+            "currency": b.currency or "YER",
+        }
+        for b in bookings
+    ]
+
+
+@router.get("/search", response_model=TicketSearchResponse)
+async def search_tickets(
+    q_name: Optional[str] = Query(None, description="Search by passenger name"),
+    q_number: Optional[str] = Query(None, description="Search by phone or document number"),
+    q_ticket: Optional[str] = Query(None, description="Search by ticket number"),
+    booking_type: Optional[BookingType] = None,
+    status: Optional[BookingStatus] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .options(
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+            selectinload(Booking.supplier),
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.visa_details),
+            selectinload(Booking.passport_details),
+            selectinload(Booking.parcel_details),
+        )
+        .order_by(desc(Booking.created_at))
+    )
+
+    # If no search criteria provided, return empty list per requirement
+    if not any([q_name, q_number, q_ticket, booking_type, status]):
+        return TicketSearchResponse(items=[], total=0, page=page, limit=limit)
+
+    # We must outerjoin all detail tables so that WHERE clauses can filter on them
+    stmt = (
+        stmt.outerjoin(Booking.customer)
+        .outerjoin(Booking.flight_details)
+        .outerjoin(Booking.transport_details)
+        .outerjoin(Booking.visa_details)
+        .outerjoin(Booking.passport_details)
+        .outerjoin(Booking.parcel_details)
+    )
+
+    # Employee privacy restriction
+    if current_user.role == UserRole.EMPLOYEE:
+        stmt = stmt.where(Booking.employee_id == current_user.id)
+
+    if booking_type:
+        stmt = stmt.where(Booking.type == booking_type)
+    if status:
+        stmt = stmt.where(Booking.status == status)
+
+    if q_name and q_name.strip():
+        term = f"%{q_name.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Customer.name.ilike(term),
+                FlightBookingDetail.passenger_name.ilike(term),
+                TransportBookingDetail.passenger_name.ilike(term),
+                VisaBookingDetail.applicant_name.ilike(term),
+                PassportBookingDetail.applicant_name.ilike(term),
+                ParcelBookingDetail.sender_name.ilike(term),
+                ParcelBookingDetail.receiver_name.ilike(term),
+            )
+        )
+    if q_number and q_number.strip():
+        term = f"%{q_number.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Customer.phone_number.ilike(term),
+                Customer.passport_number.ilike(term),
+                Customer.id_number.ilike(term),
+                FlightBookingDetail.passport_number.ilike(term),
+                FlightBookingDetail.passenger_phone.ilike(term),
+                TransportBookingDetail.id_number.ilike(term),
+                TransportBookingDetail.passenger_phone.ilike(term),
+                VisaBookingDetail.passport_number.ilike(term),
+                PassportBookingDetail.id_number.ilike(term),
+            )
+        )
+    if q_ticket and q_ticket.strip():
+        term = f"%{q_ticket.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Booking.ticket_number.ilike(term),
+                Booking.booking_id.ilike(term),
+            )
+        )
+
+    offset = (page - 1) * limit
+    res = await db.execute(stmt.offset(offset).limit(limit))
+    bookings = res.scalars().unique().all()
+
+    items: List[TicketSearchItem] = []
+    for b in bookings:
+        pass_name = b.customer.name if b.customer else "عميل"
+        pass_phone = b.customer.phone_number if b.customer else "--"
+        doc_num = (b.customer.passport_number or b.customer.id_number) if b.customer else None
+        comp_name = b.supplier.name if b.supplier else ""
+        route = "--"
+        tr_date = None
+        tr_time = None
+
+        if b.type == BookingType.FLIGHT and b.flight_details:
+            pass_name = b.flight_details.passenger_name
+            pass_phone = b.flight_details.passenger_phone
+            doc_num = b.flight_details.passport_number
+            comp_name = b.flight_details.airline_company or comp_name
+            route = f"{b.flight_details.departure_airport} -> {b.flight_details.arrival_airport}"
+            tr_date = b.flight_details.departure_date
+            tr_time = b.flight_details.departure_time
+        elif b.type == BookingType.TRANSPORT and b.transport_details:
+            pass_name = b.transport_details.passenger_name
+            pass_phone = b.transport_details.passenger_phone
+            doc_num = b.transport_details.id_number
+            comp_name = b.transport_details.transport_company or comp_name
+            route = f"{b.transport_details.departure_station} -> {b.transport_details.arrival_station}"
+            tr_date = b.transport_details.travel_date
+            tr_time = b.transport_details.travel_time
+        elif b.type == BookingType.VISA and b.visa_details:
+            pass_name = b.visa_details.applicant_name
+            pass_phone = b.visa_details.applicant_phone
+            doc_num = b.visa_details.passport_number
+            comp_name = f"تأشيرة {b.visa_details.visa_type}"
+            route = f"تأشيرة {b.visa_details.visa_type}"
+            tr_date = b.visa_details.application_date
+        elif b.type == BookingType.PASSPORT and b.passport_details:
+            pass_name = b.passport_details.applicant_name
+            pass_phone = b.passport_details.applicant_phone
+            doc_num = b.passport_details.id_number
+            comp_name = f"جواز {b.passport_details.passport_type.value}"
+            route = f"معاملة جواز ({b.passport_details.passport_type.value})"
+            tr_date = b.passport_details.application_date
+        elif b.type == BookingType.PARCEL and b.parcel_details:
+            pass_name = b.parcel_details.sender_name
+            pass_phone = b.parcel_details.sender_phone
+            comp_name = b.parcel_details.parcel_type
+            route = f"إلى: {b.parcel_details.delivery_destination}"
+            tr_date = b.parcel_details.shipping_date
+
+        cust_bal = await get_entity_balance(db, "customer", b.customer_id, b.currency) if b.customer_id else None
+
+        items.append(
+            TicketSearchItem(
+                id=b.id,
+                booking_id=b.booking_id,
+                ticket_number=b.ticket_number,
+                passenger_name=pass_name,
+                passenger_phone=pass_phone,
+                identity_number=doc_num,
+                type=b.type,
+                company_name=comp_name or "عالم النقل",
+                booking_date=b.booking_date,
+                route=route,
+                travel_date=tr_date,
+                travel_time=tr_time,
+                employee_id=b.employee_id,
+                employee_name=b.employee.full_name if b.employee else "مدير النظام",
+                status=b.status,
+                selling_price=b.selling_price,
+                paid_amount=b.paid_amount,
+                remaining_amount=b.remaining_amount,
+                currency=b.currency,
+                customer_id=b.customer_id,
+                customer_balance=cust_bal,
+                notes=b.notes,
+            )
+        )
+
+    return TicketSearchResponse(
+        items=items,
+        total=len(items),
+        page=page,
+        limit=limit,
+    )
+
+
+@router.get("/")
+async def list_bookings(
+    booking_type: Optional[BookingType] = None,
+    status_filter: Optional[BookingStatus] = None,
+    search: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .options(
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+            selectinload(Booking.supplier),
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.visa_details),
+            selectinload(Booking.passport_details),
+            selectinload(Booking.parcel_details),
+        )
+        .order_by(desc(Booking.created_at))
+    )
+
+    # Strict role enforcement: Employee sees ONLY their own bookings
+    if current_user.role == UserRole.EMPLOYEE:
+        stmt = stmt.where(Booking.employee_id == current_user.id)
+
+    if booking_type:
+        stmt = stmt.where(Booking.type == booking_type)
+    if status_filter:
+        stmt = stmt.where(Booking.status == status_filter)
+
+    if search:
+        search_term = f"%{search}%"
+        stmt = stmt.join(Booking.customer).where(
+            (Booking.ticket_number.ilike(search_term))
+            | (Booking.booking_id.ilike(search_term))
+            | (Customer.name.ilike(search_term))
+            | (Customer.phone_number.ilike(search_term))
+        )
+
+    stmt = stmt.offset(offset).limit(limit)
+    res = await db.execute(stmt)
+    bookings = res.scalars().all()
+
+    return [format_booking_response(b, current_user.role) for b in bookings]
+
+
+@router.get("/{id}")
+async def get_booking(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .where(Booking.id == id)
+        .options(
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+            selectinload(Booking.supplier),
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.visa_details),
+            selectinload(Booking.passport_details),
+            selectinload(Booking.parcel_details),
+        )
+    )
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="ليس لديك صلاحية لعرض هذا الحجز")
+
+    return format_booking_response(booking, current_user.role)
+
+
+@router.get("/{id}/journal")
+async def get_booking_journal_entries(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Booking).where(Booking.id == id).options(selectinload(Booking.customer))
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="ليس لديك صلاحية لعرض قيود هذا الحجز")
+
+    cust_bal = (
+        await get_entity_balance(db, "customer", booking.customer_id, booking.currency)
+        if booking.customer_id
+        else None
+    )
+
+    ref_ids = [booking.ticket_number, booking.booking_id]
+    je_stmt = (
+        select(JournalEntry)
+        .where(JournalEntry.reference_id.in_(ref_ids))
+        .options(selectinload(JournalEntry.lines).selectinload(JournalEntryLine.account))
+        .order_by(JournalEntry.date)
+    )
+    je_res = await db.execute(je_stmt)
+    entries = je_res.scalars().all()
+
+    entries_data = []
+    for je in entries:
+        lines = []
+        for line in je.lines:
+            lines.append({
+                "id": line.id,
+                "account_code": line.account.code if line.account else "",
+                "account_name": line.account.name if line.account else "",
+                "account_type": line.account.account_type.value if line.account else "",
+                "debit": float(line.debit),
+                "credit": float(line.credit),
+                "debit_base": float(line.debit_base),
+                "credit_base": float(line.credit_base),
+            })
+        entries_data.append({
+            "id": je.id,
+            "entry_number": je.entry_number,
+            "date": je.date.isoformat(),
+            "reference_type": je.reference_type,
+            "reference_id": je.reference_id,
+            "currency": je.currency.value,
+            "description": je.description,
+            "lines": lines,
+        })
+
+    return {
+        "booking_id": booking.id,
+        "ticket_number": booking.ticket_number,
+        "customer_name": booking.customer.name if booking.customer else None,
+        "customer_balance": float(cust_bal) if cust_bal is not None else None,
+        "currency": booking.currency,
+        "journal_entries": entries_data,
+    }
+
+
+@router.post("/{id}/cancel")
+async def cancel_booking(
+    id: int,
+    data: BookingCancelRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role == UserRole.ACCOUNTANT:
+        raise HTTPException(status_code=403, detail="المحاسب لا يملك صلاحية إلغاء الحجوزات")
+
+    stmt = select(Booking).where(Booking.id == id).options(selectinload(Booking.customer))
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="لا يمكنك إلغاء حجز تابع لموظف آخر")
+
+    if booking.status == BookingStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="الحجز ملغي مسبقاً")
+
+    now = datetime.now(timezone.utc)
+    old_data = {"status": booking.status.value, "paid": float(booking.paid_amount)}
+
+    booking.status = BookingStatus.CANCELLED
+    booking.cancelled_at = now
+    booking.cancelled_by = current_user.id
+    booking.cancellation_reason = data.reason
+    booking.refund_amount = data.refund_amount
+
+    customer = booking.customer
+
+    # Double-Entry Reverse Accounting for Cancellation
+    curr_str = booking.currency or "YER"
+    je_cancel_ref = await get_next_reference_number(db, "JE")
+
+    cash_acc = await get_account_by_code(db, f"1101-{curr_str}")
+    cust_acc = await get_entity_account(db, "customer", customer.id, curr_str, customer.name if customer else "")
+    sales_acc = await get_account_by_code(db, f"4101-{curr_str}")
+    cancel_fee_acc = await get_account_by_code(db, f"4201-{curr_str}")
+
+    cancel_lines = [
+        # Debit Sales Revenue to reverse the initial sale
+        {"account_id": sales_acc.id, "debit": booking.selling_price, "credit": Decimal("0.0000")},
+    ]
+
+    # Credit Customer AR for remaining debt being cancelled
+    if booking.remaining_amount > 0:
+        cancel_lines.append(
+            {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": booking.remaining_amount}
+        )
+
+    # Credit Cash for the refund paid back to the customer
+    if data.refund_amount > 0:
+        cancel_lines.append(
+            {"account_id": cash_acc.id, "debit": Decimal("0.0000"), "credit": data.refund_amount}
+        )
+
+    # The office retains penalty = paid_amount - refund_amount -> Credit Cancellation Fee Revenue
+    retained_penalty = booking.paid_amount - data.refund_amount
+    if retained_penalty > 0:
+        cancel_lines.append(
+            {"account_id": cancel_fee_acc.id, "debit": Decimal("0.0000"), "credit": retained_penalty}
+        )
+
+    # Reverse Supplier AP and Cost of Sales if booking had cost
+    if booking.cost_price > 0 and booking.supplier_id:
+        cogs_acc = await get_account_by_code(db, f"5101-{curr_str}")
+        supp_acc = await get_entity_account(db, "supplier", booking.supplier_id, curr_str)
+        cancel_lines.append(
+            {"account_id": supp_acc.id, "debit": booking.cost_price, "credit": Decimal("0.0000")}
+        )
+        cancel_lines.append(
+            {"account_id": cogs_acc.id, "debit": Decimal("0.0000"), "credit": booking.cost_price}
+        )
+
+    await create_journal_entry(
+        session=db,
+        entry_number=je_cancel_ref,
+        reference_type="CANCEL",
+        reference_id=booking.ticket_number,
+        currency=curr_str,
+        description=f"قيد إلغاء الحجز {booking.ticket_number} - المسترد: {data.refund_amount} {curr_str} - السبب: {data.reason}",
+        lines_data=cancel_lines,
+    )
+
+    if customer:
+        customer.balance = await get_entity_balance(db, "customer", customer.id, curr_str)
+
+    # If money is refunded back to customer, record payment_out
+    if data.refund_amount > 0 and customer:
+        py_ref = await get_next_reference_number(db, "PY")
+        refund_record = FinancialTransaction(
+            transaction_id=py_ref,
+            type=TransactionType.PAYMENT_OUT,
+            entity_type=EntityType.CUSTOMER,
+            entity_id=customer.id,
+            amount=data.refund_amount,
+            currency=booking.currency,
+            payment_method=PaymentMethod.CASH,
+            notes=f"مبلغ مسترد لإلغاء الحجز {booking.ticket_number}: {data.reason}",
+            transaction_date=date.today(),
+            booking_id=booking.id,
+            created_by=current_user.id,
+        )
+        db.add(refund_record)
+
+    await log_audit_event(
+        db,
+        "UPDATE",
+        "bookings",
+        user=current_user,
+        record_id=booking.id,
+        old_data=old_data,
+        new_data={"status": "cancelled", "refund_amount": float(data.refund_amount)},
+        request=request,
+    )
+
+    await db.commit()
+    return {"message": "تم إلغاء الحجز وتحديث الأثر المالي بنجاح"}
+
+
+@router.post("/{id}/postpone")
+async def postpone_booking(
+    id: int,
+    data: BookingPostponeRequest,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .where(Booking.id == id)
+        .options(
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+        )
+    )
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="لا يمكنك تعديل حجز تابع لموظف آخر")
+
+    if booking.status == BookingStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="لا يمكن تأجيل حجز ملغي")
+
+    target_date = data.new_departure_date or data.new_travel_date
+    if not target_date:
+        raise HTTPException(status_code=400, detail="تاريخ السفر الجديد مطلوب")
+    target_time = data.new_departure_time or data.new_travel_time
+
+    old_date = ""
+    if booking.type == BookingType.FLIGHT and booking.flight_details:
+        old_date = f"{booking.flight_details.departure_date} {booking.flight_details.departure_time}"
+        booking.flight_details.departure_date = target_date
+        if target_time:
+            booking.flight_details.departure_time = target_time
+    elif booking.type == BookingType.TRANSPORT and booking.transport_details:
+        old_date = f"{booking.transport_details.travel_date} {booking.transport_details.travel_time}"
+        booking.transport_details.travel_date = target_date
+        if target_time:
+            booking.transport_details.travel_time = target_time
+    else:
+        booking.booking_date = datetime.combine(
+            target_date, target_time or datetime.min.time(), tzinfo=timezone.utc
+        )
+
+    if data.reason:
+        booking.notes = (booking.notes + " | " if booking.notes else "") + f"تأجيل الرحلة: {data.reason}"
+
+    await log_audit_event(
+        db,
+        "UPDATE",
+        "bookings",
+        user=current_user,
+        record_id=booking.id,
+        new_data={
+            "action": "postpone",
+            "old_date": old_date,
+            "new_date": str(data.new_departure_date),
+            "reason": data.reason,
+        },
+        request=request,
+    )
+    await db.commit()
+    return {"message": "تم تأجيل موعد الرحلة بنجاح", "new_date": str(data.new_departure_date)}
+
+
+@router.post("/{id}/reroute")
+async def reroute_booking(
+    id: int,
+    data: BookingRerouteRequest,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .where(Booking.id == id)
+        .options(
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.parcel_details),
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+        )
+    )
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="لا يمكنك تعديل حجز تابع لموظف آخر")
+
+    if booking.status == BookingStatus.CANCELLED:
+        raise HTTPException(status_code=400, detail="لا يمكن تغيير مسار حجز ملغي")
+
+    old_route = ""
+    new_route = data.new_destination
+    if booking.type == BookingType.FLIGHT and booking.flight_details:
+        old_route = f"{booking.flight_details.departure_airport} -> {booking.flight_details.arrival_airport}"
+        booking.flight_details.arrival_airport = data.new_destination
+        if data.new_departure_station:
+            booking.flight_details.departure_airport = data.new_departure_station
+        new_route = f"{booking.flight_details.departure_airport} -> {booking.flight_details.arrival_airport}"
+    elif booking.type == BookingType.TRANSPORT and booking.transport_details:
+        old_route = f"{booking.transport_details.departure_station} -> {booking.transport_details.arrival_station}"
+        booking.transport_details.arrival_station = data.new_destination
+        if data.new_departure_station:
+            booking.transport_details.departure_station = data.new_departure_station
+        new_route = f"{booking.transport_details.departure_station} -> {booking.transport_details.arrival_station}"
+    elif booking.type == BookingType.PARCEL and booking.parcel_details:
+        old_route = booking.parcel_details.delivery_destination
+        booking.parcel_details.delivery_destination = data.new_destination
+
+    # Handle financial price difference with Double-Entry Journal Entry
+    diff_val = Decimal(str(data.price_difference))
+    if diff_val != Decimal("0.00"):
+        curr_str = booking.currency or "YER"
+        booking.selling_price += diff_val
+        booking.remaining_amount += diff_val
+
+        je_ref = await get_next_reference_number(db, "JE")
+        cust_acc = await get_entity_account(
+            db, "customer", booking.customer_id, curr_str, booking.customer.name if booking.customer else ""
+        )
+        sales_acc = await get_account_by_code(db, f"4101-{curr_str}")
+
+        if diff_val > 0:
+            # Customer pays extra: Debit Customer AR, Credit Sales Revenue
+            adj_lines = [
+                {"account_id": cust_acc.id, "debit": diff_val, "credit": Decimal("0.0000")},
+                {"account_id": sales_acc.id, "debit": Decimal("0.0000"), "credit": diff_val},
+            ]
+        else:
+            # Price reduction: Debit Sales Revenue, Credit Customer AR
+            abs_diff = abs(diff_val)
+            adj_lines = [
+                {"account_id": sales_acc.id, "debit": abs_diff, "credit": Decimal("0.0000")},
+                {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": abs_diff},
+            ]
+
+        await create_journal_entry(
+            session=db,
+            entry_number=je_ref,
+            reference_type="REROUTE",
+            reference_id=booking.ticket_number,
+            currency=curr_str,
+            description=f"قيد تسوية تغيير مسار الحجز {booking.ticket_number} - فارق السعر: {diff_val} {curr_str}",
+            lines_data=adj_lines,
+        )
+        if booking.customer:
+            booking.customer.balance = await get_entity_balance(db, "customer", booking.customer.id, curr_str)
+
+    if data.reason:
+        booking.notes = (booking.notes + " | " if booking.notes else "") + f"تغيير المسار: {data.reason}"
+
+    await log_audit_event(
+        db,
+        "UPDATE",
+        "bookings",
+        user=current_user,
+        record_id=booking.id,
+        new_data={
+            "action": "reroute",
+            "old_route": old_route,
+            "new_route": new_route,
+            "price_difference": float(diff_val),
+            "reason": data.reason,
+        },
+        request=request,
+    )
+    await db.commit()
+    return {"message": "تم تغيير مسار الرحلة وتحديث الأثر المالي بنجاح", "new_route": new_route}
+
+
+@router.get("/{id}/print")
+async def print_booking(
+    id: int,
+    mode: str = Query("thermal", enum=["thermal", "a4"]),
+    format: str = Query("html", enum=["html", "pdf"]),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(Booking)
+        .where(Booking.id == id)
+        .options(
+            selectinload(Booking.customer),
+            selectinload(Booking.employee),
+            selectinload(Booking.supplier),
+            selectinload(Booking.flight_details),
+            selectinload(Booking.transport_details),
+            selectinload(Booking.visa_details),
+            selectinload(Booking.passport_details),
+            selectinload(Booking.parcel_details),
+        )
+    )
+    res = await db.execute(stmt)
+    booking = res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+
+    if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="لا يمكنك طباعة حجز تابع لموظف آخر")
+
+    # Fetch settings
+    s_res = await db.execute(select(Settings).limit(1))
+    office_settings = s_res.scalar_one_or_none()
+    if not office_settings:
+        office_settings = Settings()
+
+    if format == "pdf":
+        pdf_data = generate_voucher_pdf(booking, office_settings, mode=mode)
+        return Response(
+            content=pdf_data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename=voucher-{booking.ticket_number}.pdf"},
+        )
+
+    # Default HTML
+    html_content = generate_voucher_html(booking, office_settings, mode=mode)
+    return Response(content=html_content, media_type="text/html")
