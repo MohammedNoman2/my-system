@@ -1,28 +1,26 @@
-# DEV_LOG
+# DEV_LOG (الخريطة المعمارية ونقطة التوقف للمهندسين)
 
-## Project Overview & Tech Stack
-- **Backend:** FastAPI (Python), SQLAlchemy (Async), Uvicorn.
-- **Frontend:** React, Next.js / Vite, TailwindCSS.
-- **Database:** SQLite (`arp.db`) - Async.
-- **Architecture:** Monolith API backend with a separate frontend. Double-Entry Accounting Ledger implemented.
+## Current Project Status (الوضع الراهن المكتمل)
+- **البنية التحتية**: نظام FastAPI (Backend) و React (Frontend) متصلان تماماً ومستقران. تم تطبيق كافة الترحيلات (Alembic) وعزل قاعدة البيانات محلياً.
+- **الوظائف المنجزة 100%**:
+  - نظام المصادقة وصلاحيات الأدوار (Tokens via HttpOnly Cookies).
+  - إدارة 5 أنواع من الحجوزات (طيران، نقل، تأشيرات، جوازات، طرود) بروابط فريدة `PREFIX-XXXX`.
+  - معمارية القيد المزدوج (Double-Entry Ledger) عبر `journal_entries` تعمل بثبات لتعويض الرصيد الديناميكي.
+  - إدارة الورديات النقدية (Shifts) وسندات القبض/الصرف (`v2`)، وربط العمليات تلقائياً بالوردية النشطة.
 
-## Current Milestone
-- Fully synchronized frontend and backend modules.
-- Implemented and verified double-entry accounting mechanics.
-- Shifts and void operations correctly managed and audited.
-- Core booking features (Flight, Transport, Visa, etc.) are stable and adhere to specified requirements.
+## The Exact Stop Point (نقطة التوقف الفعلية)
+**توقف التطوير تحديداً عند:** محاولة بناء وتطوير **"محرك كشف الحسابات المتعدد العملات وتقارير المبيعات الشاملة"**.
+- **السبب**: أثناء العمل على تعديل `LedgerModal.tsx` و `TicketSearchPage.tsx` وتحديث الـ Backend، حدثت أخطاء تقنية أدت لاختفاء مسارات السندات (404 Not Found) ومشكلات في ظهور الأرصدة. 
+- **الإجراء المتخذ**: تم التراجع الشامل (Revert) عن كافة التعديلات غير المستقرة، واستعادة الكود البرمجي بالكامل لـ `finance.py` والواجهات الأمامية للنقطة المستقرة الآمنة تماماً. المشروع الآن نظيف 100% ويعمل بلا أخطاء.
 
-## Architecture Decisions
-- **Documentation:** Kept central and continuously updated in `/docs` and manuals.
-- **Accounting (Double-Entry):** Using `journal_entries` and `journal_entry_lines` for immutable accounting records, replacing single-table balance columns. Balances are dynamically calculated using `get_entity_balance`.
-- **Shifts:** Shift widget integrated; financial transactions are tied to the active shift.
-- **Bookings:** Strict adherence to data model (counters `PREFIX-XXXX`, defaults to `pending`, `cost_price` hidden on schema level, removed redundant fields like `seat_number`).
+## Work in Progress / Broken Parts (الأجزاء المعلقة أو غير المكتملة)
+1. **أزرار تصدير PDF/Excel في كشف الحساب**: تراجعت عن إضافتها لـ `LedgerModal.tsx` بانتظار استكمال محرك تعدد العملات.
+2. **محرك تقارير المبيعات (`ReportsPage.tsx`)**: الواجهة الأمامية موجودة لكنها غير مرتبطة بمحرك تجميع مبيعات فعلي في الـ API.
+3. **طباعة PDF**: تعمل בوضع التوافق (Fallback) على الويندوز. التنسيق العربي المثالي يحتاج إعداد حاوية Linux (مؤجل حالياً).
 
-## Active Discussion & Review
-- Initial WeasyPrint PDF fallback mode active due to missing `libgobject` on host environment. Dockerization is planned/pending to solve this cleanly.
-- Accounting engine validated against actual DB state.
-
-## Immediate Next Tasks
-- Test WeasyPrint and Arabic layout inside a Linux Docker container.
-- Extend test coverage for remaining specialized edge cases.
-- Final production readiness and performance optimizations.
+## The Immediate Next Feature (الميزة المباشرة القادمة)
+استئناف التطوير من حيث توقفنا عبر:
+1. **تحديث `LedgerModal.tsx` و `finance.py` (كشف الحساب)**: دعمه للعملات المتعددة (YER, SAR, USD) برصيد ديناميكي موحد دون إتلاف مسارات `v2`.
+2. **إضافة أزرار التصدير (PDF/Excel)** إلى نافذة كشف الحساب.
+3. **تطوير `FinancialReportsPage.tsx`**: بناء محرك تقارير المبيعات والتوريدات. 
+*ملاحظة للمهندسين: يجب الحذر الشديد من حذف مسارات `/receipt-voucher/v2` و `/payment-voucher/v2` أو إخفاء حقل الورديات بشكل يكسر الاعتمادية الحالية.*
