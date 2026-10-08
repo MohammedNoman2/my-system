@@ -116,3 +116,132 @@ def export_report_to_pdf(report: ReportSummary) -> bytes:
         return HTML(string=html_content).write_pdf()
     else:
         return html_content.encode("utf-8")
+
+def export_ledger_to_excel(data: dict) -> bytes:
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active) # Remove default sheet
+    
+    entity_name = data.get("entity", {}).get("name", "غير محدد")
+    period = f"من {data['period']['from_date']} إلى {data['period']['to_date']}" if data['period']['from_date'] else "كل الفترات"
+    
+    for currency, ledger in data.get("ledgers", {}).items():
+        if not ledger["entries"] and ledger["opening_balance"] == 0:
+            continue # skip empty currencies
+            
+        ws = wb.create_sheet(title=currency)
+        ws.sheet_view.rightToLeft = True
+        
+        ws.merge_cells("A1:F1")
+        ws["A1"] = f"كشف حساب - {entity_name} ({currency})"
+        ws["A1"].font = Font(name="Cairo", size=14, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        
+        ws.merge_cells("A2:F2")
+        ws["A2"] = f"الفترة: {period}"
+        ws["A2"].font = Font(name="Cairo", size=11, italic=True)
+        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Summary row
+        ws.append(["الرصيد الافتتاحي", ledger["opening_balance"], "إجمالي مدين", ledger["total_debit"], "إجمالي دائن", ledger["total_credit"]])
+        ws.append(["الرصيد الختامي", ledger["closing_balance"], "", "", "", ""])
+        ws.append([]) # Empty row
+        
+        headers = ["التاريخ", "المرجع", "البيان", "مدين", "دائن", "الرصيد"]
+        ws.append(headers)
+        
+        header_row = ws[ws.max_row]
+        for cell in header_row:
+            cell.font = Font(name="Cairo", size=11, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+        thin_border = Border(
+            left=Side(style="thin", color="D1D5DB"),
+            right=Side(style="thin", color="D1D5DB"),
+            top=Side(style="thin", color="D1D5DB"),
+            bottom=Side(style="thin", color="D1D5DB"),
+        )
+        
+        for e in ledger["entries"]:
+            row = [e["date"], e["reference_id"], e["description"], e["debit"], e["credit"], e["balance"]]
+            ws.append(row)
+            for cell in ws[ws.max_row]:
+                cell.font = Font(name="Cairo", size=10)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = thin_border
+                
+        from openpyxl.utils import get_column_letter
+        for col_idx in range(1, 7):
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = 20
+            
+    if not wb.sheetnames:
+        wb.create_sheet(title="No Data")
+        
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def export_ledger_to_pdf(data: dict) -> tuple[bytes, bool]:
+    entity_name = data.get("entity", {}).get("name", "غير محدد")
+    period = f"من {data['period']['from_date']} إلى {data['period']['to_date']}" if data['period']['from_date'] else "كل الفترات"
+    
+    sections_html = ""
+    for currency, ledger in data.get("ledgers", {}).items():
+        if not ledger["entries"] and ledger["opening_balance"] == 0:
+            continue
+            
+        rows_html = ""
+        for e in ledger["entries"]:
+            rows_html += f"<tr><td>{e['date']}</td><td>{e['reference_id']}</td><td>{e['description']}</td><td>{e['debit']}</td><td>{e['credit']}</td><td>{e['balance']}</td></tr>"
+            
+        sections_html += f"""
+        <div style="margin-top: 20px;">
+            <h2 style="color: #1e3a8a; font-size: 16px;">كشف حساب ({currency})</h2>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 10px; padding: 10px; background: #f3f4f6;">
+                <div>الرصيد الافتتاحي: <strong>{ledger['opening_balance']}</strong></div>
+                <div>إجمالي مدين: <strong>{ledger['total_debit']}</strong></div>
+                <div>إجمالي دائن: <strong>{ledger['total_credit']}</strong></div>
+                <div>الرصيد الختامي: <strong>{ledger['closing_balance']}</strong></div>
+            </div>
+            <table>
+                <thead>
+                    <tr><th>التاريخ</th><th>المرجع</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+        </div>
+        """
+        
+    html_content = f"""
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @page {{ size: A4; margin: 10mm; }}
+            body {{ font-family: 'Cairo', sans-serif; direction: rtl; margin: 0; color: #111827; }}
+            .title-box {{ text-align: center; margin-bottom: 15px; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; }}
+            h1 {{ margin: 0; color: #1e3a8a; font-size: 20px; }}
+            p {{ margin: 4px 0; color: #4b5563; font-size: 12px; }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+            th, td {{ padding: 6px; border: 1px solid #ddd; text-align: center; }}
+            th {{ background: #1e3a8a; color: white; }}
+        </style>
+    </head>
+    <body>
+        <div class="title-box">
+            <h1>كشف حساب - {entity_name}</h1>
+            <p>الفترة: {period}</p>
+        </div>
+        {sections_html or "<p style='text-align:center;'>لا توجد حركات مالية</p>"}
+    </body>
+    </html>
+    """
+    
+    if WEASYPRINT_AVAILABLE:
+        return HTML(string=html_content).write_pdf(), True
+    else:
+        return html_content.encode("utf-8"), False

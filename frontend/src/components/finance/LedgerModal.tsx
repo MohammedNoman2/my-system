@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Download, RefreshCw } from 'lucide-react';
+import { BookOpen, Download, RefreshCw, FileText, FileSpreadsheet } from 'lucide-react';
 import api from '../../services/api';
 import { Modal } from '../common/Modal';
 import { Spinner } from '../common/Spinner';
 import { EmptyState } from '../common/EmptyState';
+import { Input } from '../common/Input';
+import { Button } from '../common/Button';
+import { useUIStore } from '../../context/uiStore';
 
 interface LedgerModalProps {
   isOpen: boolean;
@@ -22,29 +25,26 @@ export function LedgerModal({
 }: LedgerModalProps) {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedCurrency, setSelectedCurrency] = useState<string>('YER');
+  const [selectedCurrency, setSelectedCurrency] = useState<string>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const addToast = useUIStore((state) => state.addToast);
 
   useEffect(() => {
     async function fetchLedger() {
       if (!entityId) return;
       setIsLoading(true);
       try {
-        const endpoint =
-          entityType === 'customer'
-            ? `/finance/ledger/customer/${entityId}`
-            : `/finance/ledger/supplier/${entityId}`;
-        const res = await api.get(endpoint);
-        setData(res.data);
+        const endpoint = `/finance/ledger/v3/${entityType}/${entityId}`;
+        const params = new URLSearchParams();
+        if (fromDate) params.append('from_date', fromDate);
+        if (toDate) params.append('to_date', toDate);
         
-        // Auto-select first available currency if YER doesn't exist
-        if (res.data?.ledgers) {
-            const currencies = Object.keys(res.data.ledgers);
-            if (currencies.length > 0 && !currencies.includes('YER')) {
-                setSelectedCurrency(currencies[0]);
-            }
-        }
+        const res = await api.get(`${endpoint}?${params.toString()}`);
+        setData(res.data);
       } catch (err) {
         console.error('Failed to load ledger', err);
+        addToast('فشل في تحميل كشف الحساب', 'error');
       } finally {
         setIsLoading(false);
       }
@@ -53,95 +53,59 @@ export function LedgerModal({
     if (isOpen && entityId) {
       fetchLedger();
     }
-  }, [isOpen, entityId, entityType]);
+  }, [isOpen, entityId, entityType, fromDate, toDate]);
+
+  const handleExport = async (format: 'pdf' | 'excel') => {
+    if (!entityId) return;
+    try {
+      const endpoint = `/finance/ledger/v3/${entityType}/${entityId}/export`;
+      const params = new URLSearchParams({ format });
+      if (fromDate) params.append('from_date', fromDate);
+      if (toDate) params.append('to_date', toDate);
+      
+      const res = await api.get(`${endpoint}?${params.toString()}`, { responseType: 'blob' });
+      const disposition = res.headers['content-disposition'];
+      let filename = `ledger-${entityType}-${entityId}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
+      if (disposition && disposition.indexOf('filename=') !== -1) {
+          filename = disposition.split('filename=')[1].replace(/["']/g, "");
+      } else if (res.data.type === 'text/html') {
+          filename = filename.replace('.pdf', '.html');
+      }
+      
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error('Export failed', err);
+      addToast('فشل تصدير الكشف', 'error');
+    }
+  };
 
   if (!entityId) return null;
 
-  const entityInfo = entityType === 'customer' ? data?.customer : data?.supplier;
+  const entityInfo = data?.entity;
   const ledgers = data?.ledgers || {};
-  const availableCurrencies = Object.keys(ledgers);
-  
-  // Get data for selected currency
-  const currentLedger = ledgers[selectedCurrency] || { entries: [], balance: 0 };
-  const entries: any[] = currentLedger.entries;
-  const currentBalance = currentLedger.balance;
+  const currencies = Object.keys(ledgers).filter(c => ledgers[c].entries.length > 0 || ledgers[c].opening_balance !== 0);
 
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={`كشف حساب وسجل الأستاذ: ${entityName || entityInfo?.name || ''}`}
-      description={`عرض تفصيلي لجميع العمليات المالية والحركات المدينة والدائنة والرصيد التراكمي مفصولة حسب العملة`}
-      size="full"
-    >
-      <div className="space-y-4">
-        {/* Header KPI Summary */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
-          <div>
-            <span className="text-xs text-slate-500">الطرف المعني:</span>
-            <p className="text-base font-bold text-slate-900">
-              {entityInfo?.name || entityName} ({entityType === 'customer' ? 'عميل' : 'مورد'})
-            </p>
-            {entityInfo?.phone && (
-              <p className="text-xs text-slate-500">هاتف: {entityInfo.phone}</p>
-            )}
-          </div>
-
-          <div className="text-left">
-            <span className="text-xs text-slate-500">الرصيد الحالي المستحق ({selectedCurrency}):</span>
-            <div
-              className={`text-xl font-black ${
-                Number(currentBalance) > 0
-                  ? 'text-red-600'
-                  : Number(currentBalance) < 0
-                  ? 'text-emerald-600'
-                  : 'text-slate-800'
-              }`}
-            >
-              {Number(currentBalance).toLocaleString()} {selectedCurrency}
+  const renderLedgerTable = (curr: string, ledger: any) => (
+    <div key={curr} className="mb-6 border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+        <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-2 justify-between items-center">
+            <h3 className="font-bold text-slate-800">كشف حساب ({curr})</h3>
+            <div className="flex gap-4 text-xs font-semibold">
+                <span>افتتاحي: {Number(ledger.opening_balance).toLocaleString()}</span>
+                <span className="text-red-600">مدين: {Number(ledger.total_debit).toLocaleString()}</span>
+                <span className="text-emerald-600">دائن: {Number(ledger.total_credit).toLocaleString()}</span>
+                <span className="text-blue-700">ختامي: {Number(ledger.closing_balance).toLocaleString()}</span>
             </div>
-            <p className="text-[11px] text-slate-400">
-              {Number(currentBalance) > 0
-                ? 'مديونية مستحقة'
-                : Number(currentBalance) < 0
-                ? 'رصيد دائن مسبق'
-                : 'رصيد خالص 0.00'}
-            </p>
-          </div>
         </div>
-
-        {/* Currency Tabs */}
-        {availableCurrencies.length > 0 && (
-          <div className="flex border-b border-slate-200 gap-2 mb-4">
-            {availableCurrencies.map((curr) => (
-              <button
-                key={curr}
-                onClick={() => setSelectedCurrency(curr)}
-                className={`py-2 px-4 text-sm font-bold border-b-2 transition-colors ${
-                  selectedCurrency === curr
-                    ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
-                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                كشف حساب {curr}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Ledger Entries Table */}
-        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
-          {isLoading ? (
-            <div className="py-16">
-              <Spinner size="lg" label="جارٍ تحميل حركات كشف الحساب..." />
-            </div>
-          ) : entries.length === 0 ? (
-            <EmptyState
-              title={`لا توجد حركات مالية مسجلة بعملة ${selectedCurrency}`}
-              description="لم يتم تسجيل أي عمليات حجز أو سندات قبض أو صرف لهذا الطرف بهذه العملة."
-            />
-          ) : (
-            <div className="overflow-x-auto max-h-[55vh]">
+        {ledger.entries.length === 0 ? (
+            <div className="p-4 text-center text-slate-500">لا توجد حركات في هذه الفترة</div>
+        ) : (
+            <div className="overflow-x-auto max-h-[40vh]">
               <table className="w-full text-right text-xs sm:text-sm">
                 <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold sticky top-0">
                   <tr>
@@ -151,14 +115,13 @@ export function LedgerModal({
                     <th className="px-3.5 py-3 text-red-700">مدين (+)</th>
                     <th className="px-3.5 py-3 text-emerald-700">دائن (-)</th>
                     <th className="px-3.5 py-3 font-bold">الرصيد التراكمي</th>
-                    <th className="px-3.5 py-3">ملاحظات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {entries.map((item, idx) => (
+                  {ledger.entries.map((item: any, idx: number) => (
                     <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                       <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
-                        {item.date ? new Date(item.date).toLocaleDateString('ar-EG') : '--'}
+                        {item.date}
                       </td>
                       <td className="px-3.5 py-2.5 font-mono font-bold text-[#1e3a8a]">
                         {item.reference_id || '--'}
@@ -173,18 +136,95 @@ export function LedgerModal({
                         {Number(item.credit) > 0 ? Number(item.credit).toLocaleString() : '--'}
                       </td>
                       <td className="px-3.5 py-2.5 font-bold font-mono text-slate-900">
-                        {Number(item.balance).toLocaleString()} {selectedCurrency}
-                      </td>
-                      <td className="px-3.5 py-2.5 text-xs text-slate-400 max-w-xs truncate">
-                        {item.notes || '--'}
+                        {Number(item.balance).toLocaleString()} {curr}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
+        )}
+    </div>
+  );
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`كشف حساب وسجل الأستاذ: ${entityInfo?.name || entityName || ''}`}
+      description="عرض تفصيلي للعمليات مفصولة حسب العملة"
+      size="full"
+    >
+      <div className="space-y-4">
+        {/* Header KPI & Date Filter */}
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+          <div className="flex gap-4 items-end">
+            <Input label="من تاريخ" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <Input label="إلى تاريخ" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => handleExport('excel')} className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+                <FileSpreadsheet className="w-4 h-4 ml-2" /> Excel
+            </Button>
+            <Button variant="outline" onClick={() => handleExport('pdf')} className="text-red-700 border-red-200 hover:bg-red-50">
+                <FileText className="w-4 h-4 ml-2" /> PDF
+            </Button>
+          </div>
         </div>
+
+        {/* Closing Balances Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {['YER', 'SAR', 'USD'].map(curr => (
+                <div key={curr} className="p-4 bg-white border border-slate-200 rounded-lg shadow-sm text-center">
+                    <p className="text-sm text-slate-500">الرصيد الختامي ({curr})</p>
+                    <p className={`text-xl font-bold ${Number(ledgers[curr]?.closing_balance) > 0 ? 'text-red-600' : Number(ledgers[curr]?.closing_balance) < 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
+                        {ledgers[curr] ? Number(ledgers[curr].closing_balance).toLocaleString() : '0.00'}
+                    </p>
+                </div>
+            ))}
+        </div>
+
+        {/* Currency Tabs */}
+        <div className="flex border-b border-slate-200 gap-2 mb-4">
+            <button
+                onClick={() => setSelectedCurrency('all')}
+                className={`py-2 px-4 text-sm font-bold border-b-2 transition-colors ${
+                  selectedCurrency === 'all' ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                }`}
+            >
+                الكل
+            </button>
+            {currencies.map((curr) => (
+              <button
+                key={curr}
+                onClick={() => setSelectedCurrency(curr)}
+                className={`py-2 px-4 text-sm font-bold border-b-2 transition-colors ${
+                  selectedCurrency === curr ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {curr}
+              </button>
+            ))}
+        </div>
+
+        {/* Ledger Tables */}
+        {isLoading ? (
+            <div className="py-16">
+              <Spinner size="lg" label="جارٍ تحميل حركات كشف الحساب..." />
+            </div>
+        ) : (
+            <div>
+                {selectedCurrency === 'all' ? (
+                    currencies.length > 0 ? currencies.map(curr => renderLedgerTable(curr, ledgers[curr])) : (
+                        <EmptyState title="لا توجد حركات" description="لا توجد عمليات مالية مسجلة" />
+                    )
+                ) : (
+                    ledgers[selectedCurrency] ? renderLedgerTable(selectedCurrency, ledgers[selectedCurrency]) : (
+                        <EmptyState title="لا توجد حركات" description={`لا توجد عمليات مسجلة بعملة ${selectedCurrency}`} />
+                    )
+                )}
+            </div>
+        )}
       </div>
     </Modal>
   );

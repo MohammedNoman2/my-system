@@ -1066,3 +1066,61 @@ async def get_supplier_ledger(
 
     return {"supplier": {"id": supp.id, "name": supp.name, "phone": supp.phone_number, "current_balance": supp.balance},
             "ledgers": ledgers_by_currency}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. MULTI-CURRENCY LEDGER V3 (NEW)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/ledger/v3/{entity_type}/{entity_id}")
+async def get_ledger_v3(
+    entity_type: str,
+    entity_id: int,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    currency: Optional[str] = None,
+    current_user: User = Depends(require_accountant_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    from app.services.ledger_service import get_ledger_statement
+    return await get_ledger_statement(db, entity_type, entity_id, from_date, to_date, currency)
+
+@router.get("/ledger/v3/{entity_type}/{entity_id}/export")
+async def export_ledger_v3(
+    entity_type: str,
+    entity_id: int,
+    format: str,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    currency: Optional[str] = None,
+    current_user: User = Depends(require_accountant_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    from app.services.ledger_service import get_ledger_statement
+    from app.services.export_service import export_ledger_to_excel, export_ledger_to_pdf
+    from fastapi.responses import Response
+    
+    data = await get_ledger_statement(db, entity_type, entity_id, from_date, to_date, currency)
+    
+    if format.lower() == "excel":
+        file_bytes = export_ledger_to_excel(data)
+        return Response(
+            content=file_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="ledger-{entity_type}-{entity_id}.xlsx"'}
+        )
+    elif format.lower() == "pdf":
+        file_bytes, is_pdf = export_ledger_to_pdf(data)
+        if is_pdf:
+            return Response(
+                content=file_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="ledger-{entity_type}-{entity_id}.pdf"'}
+            )
+        else:
+            return Response(
+                content=file_bytes,
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="ledger-{entity_type}-{entity_id}.html"'}
+            )
+    else:
+        raise HTTPException(status_code=400, detail="صيغة التصدير غير مدعومة")
