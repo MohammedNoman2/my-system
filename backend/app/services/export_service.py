@@ -72,7 +72,7 @@ def export_report_to_excel(report: ReportSummary) -> bytes:
     return output.getvalue()
 
 
-def export_report_to_pdf(report: ReportSummary) -> bytes:
+def export_report_to_pdf(report: ReportSummary) -> tuple[bytes, bool]:
     headers_html = ""
     rows_html = ""
 
@@ -92,14 +92,23 @@ def export_report_to_pdf(report: ReportSummary) -> bytes:
         <meta charset="utf-8">
         <style>
             @page {{ size: A4 landscape; margin: 10mm; }}
-            body {{ font-family: 'Cairo', sans-serif; direction: rtl; margin: 0; color: #111827; }}
+            body {{ font-family: 'Cairo', sans-serif; direction: rtl; margin: 0; color: #111827; background: #fff; }}
             .title-box {{ text-align: center; margin-bottom: 15px; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; }}
             h1 {{ margin: 0; color: #1e3a8a; font-size: 20px; }}
             p {{ margin: 4px 0; color: #4b5563; font-size: 12px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; page-break-inside: auto; }}
+            tr {{ page-break-inside: avoid; page-break-after: auto; }}
+            th {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+            
+            @media print {{
+                body {{ padding: 20px; }}
+                th {{ background: #1e3a8a !important; color: white !important; border: 1px solid #ddd; }}
+                td {{ border: 1px solid #ddd; }}
+                .no-print {{ display: none !important; }}
+            }}
         </style>
     </head>
-    <body>
+    <body onload="window.print()">
         <div class="title-box">
             <h1>{report.title}</h1>
             <p>الفترة / المعيار: {report.period}</p>
@@ -113,9 +122,9 @@ def export_report_to_pdf(report: ReportSummary) -> bytes:
     </html>
     """
     if WEASYPRINT_AVAILABLE:
-        return HTML(string=html_content).write_pdf()
+        return HTML(string=html_content).write_pdf(), True
     else:
-        return html_content.encode("utf-8")
+        return html_content.encode("utf-8"), False
 
 def export_ledger_to_excel(data: dict) -> bytes:
     wb = openpyxl.Workbook()
@@ -222,21 +231,29 @@ def export_ledger_to_pdf(data: dict) -> tuple[bytes, bool]:
         <meta charset="utf-8">
         <style>
             @page {{ size: A4; margin: 10mm; }}
-            body {{ font-family: 'Cairo', sans-serif; direction: rtl; margin: 0; color: #111827; }}
+            body {{ font-family: 'Cairo', sans-serif; direction: rtl; margin: 0; color: #111827; background: #fff; }}
             .title-box {{ text-align: center; margin-bottom: 15px; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; }}
             h1 {{ margin: 0; color: #1e3a8a; font-size: 20px; }}
             p {{ margin: 4px 0; color: #4b5563; font-size: 12px; }}
-            table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 11px; page-break-inside: auto; }}
+            tr {{ page-break-inside: avoid; page-break-after: auto; }}
             th, td {{ padding: 6px; border: 1px solid #ddd; text-align: center; }}
-            th {{ background: #1e3a8a; color: white; }}
+            th {{ background: #1e3a8a; color: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+            
+            @media print {{
+                body {{ padding: 20px; }}
+                th {{ background: #1e3a8a !important; color: white !important; }}
+                .no-print {{ display: none !important; }}
+                .summary-box {{ background: #f3f4f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+            }}
         </style>
     </head>
-    <body>
+    <body onload="window.print()">
         <div class="title-box">
             <h1>كشف حساب - {entity_name}</h1>
             <p>الفترة: {period}</p>
         </div>
-        {sections_html or "<p style='text-align:center;'>لا توجد حركات مالية</p>"}
+        {sections_html.replace('background: #f3f4f6;', 'background: #f3f4f6;').replace('<div style="display: flex;', '<div class="summary-box" style="display: flex;') or "<p style='text-align:center;'>لا توجد حركات مالية</p>"}
     </body>
     </html>
     """

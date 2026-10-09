@@ -340,9 +340,16 @@ async def export_pdf(
     db: AsyncSession = Depends(get_db),
 ):
     summary = await build_report(filters, current_user, db)
-    pdf_bytes = export_report_to_pdf(summary)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=report-{filters.report_type}.pdf"},
-    )
+    pdf_bytes, is_pdf = export_report_to_pdf(summary)
+    
+    if is_pdf:
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=report-{filters.report_type}.pdf"},
+        )
+    else:
+        return Response(
+            content=pdf_bytes,
+            media_type="text/html; charset=utf-8"
+        )

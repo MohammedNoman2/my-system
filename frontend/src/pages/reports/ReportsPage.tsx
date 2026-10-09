@@ -196,25 +196,35 @@ export function ReportsPage() {
             if (endDate) params.append('to_date', endDate);
             
             const res = await api.get(`${endpoint}?${params.toString()}`, { responseType: 'blob' });
-            const disposition = res.headers['content-disposition'];
-            let filename = `ledger-${ledgerEntityType}-${selectedEntityId}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
-            if (disposition && disposition.indexOf('filename=') !== -1) {
-                filename = disposition.split('filename=')[1].replace(/["']/g, "");
-            } else if (res.data.type === 'text/html') {
-                filename = filename.replace('.pdf', '.html');
-            }
             
-            const url = window.URL.createObjectURL(new Blob([res.data]));
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', filename);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            addToast(`تم تصدير كشف الحساب بنجاح`, 'success');
-        } catch (err) {
+            const contentType = String(res.headers['content-type'] || "");
+            if (contentType.includes("text/html")) {
+                const text = await res.data.text();
+                const printWindow = window.open("", "_blank");
+                if (printWindow) {
+                    printWindow.document.write(text);
+                    printWindow.document.close();
+                    printWindow.focus();
+                }
+            } else {
+                const disposition = res.headers['content-disposition'];
+                let filename = `ledger-${ledgerEntityType}-${selectedEntityId}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
+                if (disposition && disposition.indexOf('filename=') !== -1) {
+                    filename = disposition.split('filename=')[1].replace(/["']/g, "");
+                }
+                const url = window.URL.createObjectURL(new Blob([res.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', filename);
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.URL.revokeObjectURL(url);
+                addToast(`تم تصدير كشف الحساب بنجاح`, 'success');
+            }
+        } catch (err: any) {
             console.error('Export failed', err);
-            addToast('فشل تصدير الكشف', 'error');
+            addToast(err?.response?.status === 403 ? 'عذراً، لا تملك الصلاحية' : 'فشل تصدير الكشف', 'error');
         } finally {
             if (format === 'excel') setIsExportingExcel(false);
             else setIsExportingPdf(false);
@@ -233,24 +243,34 @@ export function ReportsPage() {
       const endpoint = format === 'excel' ? '/reports/export/excel' : '/reports/export/pdf';
       const res = await api.post(endpoint, payload, { responseType: 'blob' });
 
-      const blob = new Blob([res.data]);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute(
-        'download',
-        `report-${activeReport}-${new Date().toISOString().split('T')[0]}.${
-          format === 'excel' ? 'xlsx' : 'pdf'
-        }`
-      );
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-
-      addToast(`تم تحميل التقرير بصيغة ${format.toUpperCase()} بنجاح`, 'success');
+      const contentType = String(res.headers['content-type'] || "");
+      if (contentType.includes("text/html")) {
+          const text = await res.data.text();
+          const printWindow = window.open("", "_blank");
+          if (printWindow) {
+              printWindow.document.write(text);
+              printWindow.document.close();
+              printWindow.focus();
+          }
+      } else {
+          const blob = new Blob([res.data]);
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.setAttribute(
+            'download',
+            `report-${activeReport}-${new Date().toISOString().split('T')[0]}.${
+              format === 'excel' ? 'xlsx' : 'pdf'
+            }`
+          );
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.URL.revokeObjectURL(url);
+          addToast(`تم تحميل التقرير بصيغة ${format.toUpperCase()} بنجاح`, 'success');
+      }
     } catch (err: any) {
-      addToast('فشل تصدير التقرير', 'error');
+      addToast(err?.response?.status === 403 ? 'عذراً، لا تملك الصلاحية' : 'فشل تصدير التقرير', 'error');
     } finally {
       if (format === 'excel') setIsExportingExcel(false);
       else setIsExportingPdf(false);

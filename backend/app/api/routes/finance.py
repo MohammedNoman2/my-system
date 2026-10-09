@@ -1119,8 +1119,7 @@ async def export_ledger_v3(
         else:
             return Response(
                 content=file_bytes,
-                media_type="text/html",
-                headers={"Content-Disposition": f'attachment; filename="ledger-{entity_type}-{entity_id}.html"'}
+                media_type="text/html; charset=utf-8"
             )
     else:
         raise HTTPException(status_code=400, detail="صيغة التصدير غير مدعومة")

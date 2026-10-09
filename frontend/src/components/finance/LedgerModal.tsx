@@ -64,24 +64,34 @@ export function LedgerModal({
       if (toDate) params.append('to_date', toDate);
       
       const res = await api.get(`${endpoint}?${params.toString()}`, { responseType: 'blob' });
-      const disposition = res.headers['content-disposition'];
-      let filename = `ledger-${entityType}-${entityId}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
-      if (disposition && disposition.indexOf('filename=') !== -1) {
-          filename = disposition.split('filename=')[1].replace(/["']/g, "");
-      } else if (res.data.type === 'text/html') {
-          filename = filename.replace('.pdf', '.html');
-      }
       
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', filename);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (err) {
+      const contentType = String(res.headers['content-type'] || "");
+      if (contentType.includes("text/html")) {
+        const text = await res.data.text();
+        const printWindow = window.open("", "_blank");
+        if (printWindow) {
+          printWindow.document.write(text);
+          printWindow.document.close();
+          printWindow.focus();
+        }
+      } else {
+        const disposition = res.headers['content-disposition'];
+        let filename = `ledger-${entityType}-${entityId}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
+        if (disposition && disposition.indexOf('filename=') !== -1) {
+            filename = disposition.split('filename=')[1].replace(/["']/g, "");
+        }
+        const url = window.URL.createObjectURL(new Blob([res.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
       console.error('Export failed', err);
-      addToast('فشل تصدير الكشف', 'error');
+      addToast(err?.response?.status === 403 ? 'عذراً، لا تملك الصلاحية' : 'فشل تصدير الكشف', 'error');
     }
   };
 
