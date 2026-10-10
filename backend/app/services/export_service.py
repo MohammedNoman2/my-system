@@ -16,60 +16,78 @@ except Exception as e:
 
 
 def export_report_to_excel(report: ReportSummary) -> bytes:
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Report"
-    ws.sheet_view.rightToLeft = True
-
-    # Title header
-    ws.merge_cells("A1:G1")
-    ws["A1"] = f"{report.title} - منصة ARP"
-    ws["A1"].font = Font(name="Cairo", size=14, bold=True, color="FFFFFF")
-    ws["A1"].fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-
-    ws["A2"] = f"الفترة / المعيار: {report.period}"
-    ws["A2"].font = Font(name="Cairo", size=11, italic=True)
-
-    if not report.rows:
-        ws["A4"] = "لا توجد بيانات متاحة لهذا التقرير"
+    try:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Report"
+        ws.sheet_view.rightToLeft = True
+    
+        # Title header
+        ws["A1"] = f"{report.title} - منصة ARP"
+        ws["A1"].font = Font(name="Cairo", size=14, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.merge_cells("A1:G1")
+    
+        ws["A2"] = f"الفترة / المعيار: {report.period}"
+        ws["A2"].font = Font(name="Cairo", size=11, italic=True)
+        ws.merge_cells("A2:G2")
+    
+        if not report.rows:
+            ws["A4"] = "لا توجد بيانات متاحة لهذا التقرير"
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            return output.getvalue()
+    
+        headers = list(report.rows[0].keys())
+        row_idx = 4
+        for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=str(header))
+            cell.font = Font(name="Cairo", size=11, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+    
+        thin_border = Border(
+            left=Side(style="thin", color="D1D5DB"),
+            right=Side(style="thin", color="D1D5DB"),
+            top=Side(style="thin", color="D1D5DB"),
+            bottom=Side(style="thin", color="D1D5DB"),
+        )
+    
+        def safe_float(val):
+            if val is None: return 0.0
+            try: return float(val)
+            except: return val
+    
+        for item in report.rows:
+            row_idx += 1
+            for col_idx, header in enumerate(headers, 1):
+                val = item.get(header, "")
+                if val is None: val = ""
+                # Optional: convert numeric values
+                if isinstance(val, (int, float)) or (isinstance(val, str) and val.replace('.','',1).isdigit()):
+                    val = safe_float(val)
+                else:
+                    val = str(val)
+                
+                cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                cell.font = Font(name="Cairo", size=10)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = thin_border
+    
+        from openpyxl.utils import get_column_letter
+        for col_idx in range(1, len(headers) + 1):
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = 20
+    
         output = io.BytesIO()
         wb.save(output)
+        output.seek(0)
         return output.getvalue()
-
-    headers = list(report.rows[0].keys())
-    row_idx = 4
-    for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=row_idx, column=col_idx, value=str(header))
-        cell.font = Font(name="Cairo", size=11, bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    thin_border = Border(
-        left=Side(style="thin", color="D1D5DB"),
-        right=Side(style="thin", color="D1D5DB"),
-        top=Side(style="thin", color="D1D5DB"),
-        bottom=Side(style="thin", color="D1D5DB"),
-    )
-
-    for item in report.rows:
-        row_idx += 1
-        for col_idx, header in enumerate(headers, 1):
-            val = item.get(header, "")
-            cell = ws.cell(row=row_idx, column=col_idx, value=str(val) if val is not None else "")
-            cell.font = Font(name="Cairo", size=10)
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = thin_border
-
-    # Adjust column widths
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or "")) for cell in col)
-        col_letter = col[0].column_letter
-        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
-
-    output = io.BytesIO()
-    wb.save(output)
-    return output.getvalue()
+    except Exception as e:
+        logger.error(f"Excel export error: {str(e)}")
+        raise
 
 
 def export_report_to_pdf(report: ReportSummary) -> tuple[bytes, bool]:
@@ -127,44 +145,13 @@ def export_report_to_pdf(report: ReportSummary) -> tuple[bytes, bool]:
         return html_content.encode("utf-8"), False
 
 def export_ledger_to_excel(data: dict) -> bytes:
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active) # Remove default sheet
-    
-    entity_name = data.get("entity", {}).get("name", "غير محدد")
-    period = f"من {data['period']['from_date']} إلى {data['period']['to_date']}" if data['period']['from_date'] else "كل الفترات"
-    
-    for currency, ledger in data.get("ledgers", {}).items():
-        if not ledger["entries"] and ledger["opening_balance"] == 0:
-            continue # skip empty currencies
-            
-        ws = wb.create_sheet(title=currency)
-        ws.sheet_view.rightToLeft = True
+    try:
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active) # Remove default sheet
         
-        ws.merge_cells("A1:F1")
-        ws["A1"] = f"كشف حساب - {entity_name} ({currency})"
-        ws["A1"].font = Font(name="Cairo", size=14, bold=True, color="FFFFFF")
-        ws["A1"].fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        entity_name = data.get("entity", {}).get("name", "غير محدد")
+        period = f"من {data['period']['from_date']} إلى {data['period']['to_date']}" if data['period']['from_date'] else "كل الفترات"
         
-        ws.merge_cells("A2:F2")
-        ws["A2"] = f"الفترة: {period}"
-        ws["A2"].font = Font(name="Cairo", size=11, italic=True)
-        ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
-        
-        # Summary row
-        ws.append(["الرصيد الافتتاحي", ledger["opening_balance"], "إجمالي مدين", ledger["total_debit"], "إجمالي دائن", ledger["total_credit"]])
-        ws.append(["الرصيد الختامي", ledger["closing_balance"], "", "", "", ""])
-        ws.append([]) # Empty row
-        
-        headers = ["التاريخ", "المرجع", "البيان", "مدين", "دائن", "الرصيد"]
-        ws.append(headers)
-        
-        header_row = ws[ws.max_row]
-        for cell in header_row:
-            cell.font = Font(name="Cairo", size=11, bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            
         thin_border = Border(
             left=Side(style="thin", color="D1D5DB"),
             right=Side(style="thin", color="D1D5DB"),
@@ -172,25 +159,71 @@ def export_ledger_to_excel(data: dict) -> bytes:
             bottom=Side(style="thin", color="D1D5DB"),
         )
         
-        for e in ledger["entries"]:
-            row = [e["date"], e["reference_id"], e["description"], e["debit"], e["credit"], e["balance"]]
-            ws.append(row)
-            for cell in ws[ws.max_row]:
-                cell.font = Font(name="Cairo", size=10)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                cell.border = thin_border
+        for currency, ledger in data.get("ledgers", {}).items():
+            if not ledger["entries"] and ledger["opening_balance"] == 0:
+                continue # skip empty currencies
                 
-        from openpyxl.utils import get_column_letter
-        for col_idx in range(1, 7):
-            col_letter = get_column_letter(col_idx)
-            ws.column_dimensions[col_letter].width = 20
+            ws = wb.create_sheet(title=currency)
+            ws.sheet_view.rightToLeft = True
             
-    if not wb.sheetnames:
-        wb.create_sheet(title="No Data")
-        
-    output = io.BytesIO()
-    wb.save(output)
-    return output.getvalue()
+            # Format A1 before merging
+            ws["A1"] = f"كشف حساب - {entity_name} ({currency})"
+            ws["A1"].font = Font(name="Cairo", size=14, bold=True, color="FFFFFF")
+            ws["A1"].fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+            ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws.merge_cells("A1:F1")
+            
+            # Format A2 before merging
+            ws["A2"] = f"الفترة: {period}"
+            ws["A2"].font = Font(name="Cairo", size=11, italic=True)
+            ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+            ws.merge_cells("A2:F2")
+            
+            def safe_float(val):
+                if val is None: return 0.0
+                try: return float(val)
+                except: return 0.0
+            
+            # Summary row
+            ws.append(["الرصيد الافتتاحي", safe_float(ledger["opening_balance"]), "إجمالي مدين", safe_float(ledger["total_debit"]), "إجمالي دائن", safe_float(ledger["total_credit"])])
+            ws.append(["الرصيد الختامي", safe_float(ledger["closing_balance"]), "", "", "", ""])
+            ws.append([]) # Empty row
+            
+            headers = ["التاريخ", "المرجع", "البيان", "مدين", "دائن", "الرصيد"]
+            ws.append(headers)
+            
+            header_row = ws[ws.max_row]
+            for cell in header_row:
+                cell.font = Font(name="Cairo", size=11, bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                
+            for e in ledger["entries"]:
+                # Ensure date is string
+                date_val = str(e["date"]) if e["date"] is not None else ""
+                row = [date_val, e["reference_id"], e["description"], safe_float(e["debit"]), safe_float(e["credit"]), safe_float(e["balance"])]
+                ws.append(row)
+                for cell in ws[ws.max_row]:
+                    if type(cell).__name__ == 'MergedCell': continue
+                    cell.font = Font(name="Cairo", size=10)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.border = thin_border
+                    
+            from openpyxl.utils import get_column_letter
+            for col_idx in range(1, 7):
+                col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = 20
+                
+        if not wb.sheetnames:
+            wb.create_sheet(title="No Data")
+            
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output.getvalue()
+    except Exception as e:
+        logger.error(f"Excel export error: {str(e)}")
+        raise
 
 
 def export_ledger_to_pdf(data: dict) -> tuple[bytes, bool]:

@@ -91,7 +91,15 @@ export function LedgerModal({
       }
     } catch (err: any) {
       console.error('Export failed', err);
-      addToast(err?.response?.status === 403 ? 'عذراً، لا تملك الصلاحية' : 'فشل تصدير الكشف', 'error');
+      let errorMsg = err?.response?.status === 403 ? 'عذراً، لا تملك الصلاحية' : 'فشل تصدير الكشف';
+      if (err?.response?.data instanceof Blob) {
+          try {
+              const text = await err.response.data.text();
+              const json = JSON.parse(text);
+              if (json.detail) errorMsg = json.detail;
+          } catch(e) {}
+      }
+      addToast(errorMsg, 'error');
     }
   };
 

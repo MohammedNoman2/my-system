@@ -61,3 +61,10 @@
   - في `export_service.py`: تمت إضافة `@media print` وتنسيقات مناسبة للطباعة، مع استدعاء `window.print()` عند التحميل.
   - في `finance.py` و `reports.py`: تعديل نوع الاستجابة إلى `text/html; charset=utf-8` إذا لم يكن التصدير PDF حقيقياً.
   - في `LedgerModal.tsx` و `ReportsPage.tsx`: إضافة منطق يفحص `Content-Type`، ويقوم بفتح نافذة معاينة الطباعة `window.open` لعرض الـ HTML إذا لم يكن PDF، وتم التحقق من تجاوز فحص الـ Typescript بنجاح.
+
+## 8. معالجة خطأ 500 عند تصدير Excel
+- **المشكلة**: ظهور خطأ `Internal Server Error 500` ناتج عن `AttributeError: 'MergedCell' object has no attribute 'column_letter'` وبعض القيم `None` في التقرير.
+- **المعالجة**:
+  - تم إصلاح حلقة الـ `for col in ws.columns` لتعتمد على التكرار عبر عدد الأعمدة واستخدام `openpyxl.utils.get_column_letter` لتجنب اصطدامها بالخلايا المدمجة (Merged Cells) في الترويسة.
+  - تم إضافة دالة `safe_float` لتحويل قيم `None` والنصوص باهتة التنسيق إلى `0.0` بشكل آمن قبل الحقن في الخلايا، وتم إحاطة عمليات التصدير بكتلة `try...except`.
+  - تم تحسين معالجة الواجهة الأمامية (`catch`) لتستخرج رسالة الخطأ النصية من الـ `Blob` الوارد وعرضها للمستخدم بشكل أنيق في `Toast` بدلاً من السقوط الصامت.
