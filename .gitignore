@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -7,3 +7,4 @@ backend/arp.db
 arp.db
 .vscode/
 backend/db_out*.txt
+db_out*.txt
