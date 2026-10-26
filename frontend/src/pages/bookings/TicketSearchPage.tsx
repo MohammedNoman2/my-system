@@ -404,7 +404,7 @@ export function TicketSearchPage() {
                           {Number(v.amount).toLocaleString()} <span className="text-xs font-normal text-slate-500">{v.currency}</span>
                         </td>
                         <td className="px-3 py-2.5 text-slate-600">
-                          {({ cash: 'نقداً', bank_transfer: 'حوالة', cheque: 'شيك', credit: 'آجل' } as Record<string, string>)[v.payment_method] || v.payment_method}
+                          {({ cash: 'نقداً', bank_transfer: 'حوالة', check: 'شيك مصرفي', cheque: 'شيك', credit: 'آجل' } as Record<string, string>)[v.payment_method] || v.payment_method}
                         </td>
                         <td className="px-3 py-2.5 text-slate-500 max-w-32 truncate">{v.notes || '--'}</td>
                         <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{v.transaction_date ? new Date(v.transaction_date).toLocaleDateString('ar-EG') : '--'}</td>

@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.models.booking import BookingStatus, BookingType
 from app.models.booking_details.flight import FlightTicketType
 from app.models.booking_details.passport import PassportPriority, PassportType
@@ -102,8 +102,17 @@ class BookingCreate(BaseModel):
 
 
 class BookingCancelRequest(BaseModel):
-    reason: str
+    reason: Optional[str] = None
+    cancellation_reason: Optional[str] = None
     refund_amount: Decimal = Decimal("0.00")
+
+    @model_validator(mode="after")
+    def ensure_reason(self) -> "BookingCancelRequest":
+        resolved = (self.reason or self.cancellation_reason or "").strip()
+        if not resolved:
+            raise ValueError("سبب الإلغاء مطلوب")
+        self.reason = resolved
+        return self
 
 
 class BookingPostponeRequest(BaseModel):

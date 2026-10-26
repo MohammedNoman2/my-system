@@ -62,6 +62,7 @@ export function FinancePage() {
   const paymentMethods: Record<string, string> = {
     cash: 'نقداً',
     bank_transfer: 'تحويل بنكي',
+    check: 'شيك مصرفي',
     cheque: 'شيك',
     credit: 'آجل',
   };

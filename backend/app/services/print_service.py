@@ -439,3 +439,185 @@ def generate_voucher_pdf(booking: Booking, office_settings: Settings, mode: str 
     else:
         # Fallback to HTML string encoded as bytes if weasyprint dynamic library is absent on host
         return html_content.encode("utf-8")
+
+
+def generate_financial_voucher_html(
+    voucher: Any,
+    entity_name: str,
+    entity_phone: Optional[str],
+    office_settings: Optional[Settings],
+    allocations: List[Dict[str, Any]],
+    issued_by_name: str,
+    mode: str = "thermal",
+) -> str:
+    """توليد قالب HTML رسمي لطباعة سند القبض (RC) أو سند الصرف (PY) بوضع حراري أو A4."""
+    if not office_settings:
+        office_settings = Settings()
+
+    tx_type_val = voucher.type.value if hasattr(voucher.type, "value") else str(voucher.type)
+    is_receipt = tx_type_val == "payment_in"
+    title = "سند قبض" if is_receipt else "سند صرف"
+    entity_label = "استلمنا من السيد / السادة" if is_receipt else "صرفنا للسيد / السادة"
+
+    pm_val = voucher.payment_method.value if hasattr(voucher.payment_method, "value") else str(voucher.payment_method)
+    pm_ar = {
+        "cash": "نقداً (الصندوق)",
+        "bank_transfer": "حوالة / تحويل بنكي",
+        "check": "شيك مصرفي",
+    }.get(pm_val, pm_val)
+
+    curr = getattr(voucher, "currency", "YER") or "YER"
+    amount_str = f"{voucher.amount:,.2f} {curr}"
+    date_str = str(voucher.transaction_date) if voucher.transaction_date else "--"
+    ref_num = getattr(voucher, "reference_number", None) or "--"
+    notes = getattr(voucher, "notes", None) or "لا توجد ملاحظات إضافية"
+    is_void = getattr(voucher, "is_void", False)
+    status_str = f"ملغي ({getattr(voucher, 'void_reason', '') or ''})" if is_void else "معتمد ونشط"
+
+    rows = [
+        [
+            {"label": "التاريخ", "value": date_str, "bold": True},
+            {"label": "رقم الهاتف", "value": entity_phone or "--", "bold": True},
+            {"label": entity_label, "value": entity_name or "--", "bold": True},
+        ],
+        [
+            {"label": "رقم المرجع / الحوالة", "value": ref_num, "bold": True},
+            {"label": "طريقة الدفع", "value": pm_ar, "bold": True},
+            {"label": "المبلغ والعملة", "value": amount_str, "bold": True},
+        ],
+        [
+            {"label": "حالة السند", "value": status_str, "bold": True},
+            {"label": "الموظف المصدر", "value": issued_by_name or "النظام", "bold": True},
+            {"label": "البيان والملاحظات", "value": notes, "bold": False},
+        ],
+    ]
+    table_html = build_field_table_html(rows)
+
+    alloc_html = ""
+    if allocations:
+        alloc_rows = "".join(
+            f"<tr>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>#{a.get('booking_id')}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('allocated_amount')} {curr}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('exchange_rate')}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('allocated_in_booking_currency')} {a.get('target_currency')}</td>"
+            f"</tr>"
+            for a in allocations
+        )
+        alloc_html = f"""
+        <div style="margin-top:8px;margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:bold;margin-bottom:4px;">تفاصيل تخصيص السداد على التذاكر:</div>
+            <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #1f2937;">
+                <thead>
+                    <tr style="background:#f3f4f6;">
+                        <th style="border:1px solid #1f2937;padding:4px;">معرف الحجز</th>
+                        <th style="border:1px solid #1f2937;padding:4px;">المبلغ المخصص</th>
+                        <th style="border:1px solid #1f2937;padding:4px;">سعر الصرف</th>
+                        <th style="border:1px solid #1f2937;padding:4px;">المعادل بعملة التذكرة</th>
+                    </tr>
+                </thead>
+                <tbody>{alloc_rows}</tbody>
+            </table>
+        </div>
+        """
+
+    logo_src = getattr(office_settings, "logo_data", None) or (
+        office_settings.logo_image_url if office_settings.logo_image_url and os.path.exists(office_settings.logo_image_url) else None
+    )
+    if logo_src:
+        logo_content = f'<img src="{logo_src}" style="max-width: 100%; max-height: 75px; object-fit: contain;" />'
+    else:
+        logo_content = f'<div style="font-size: 14px; font-weight: bold; color: #111827; text-align: center;">{office_settings.office_name}</div>'
+
+    is_thermal = (mode == "thermal")
+    container_width = "615px" if is_thermal else "280mm"
+    container_padding = "10px" if is_thermal else "20px"
+
+    return f"""<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <title>{title} - {voucher.transaction_id}</title>
+    <style>
+        {_font_face_css()}
+        @page {{
+            size: {'615px 420px' if is_thermal else 'A4 landscape'};
+            margin: {'4mm' if is_thermal else '10mm'};
+        }}
+        * {{
+            box-sizing: border-box;
+            font-family: 'Cairo', 'Noto Sans Arabic', sans-serif;
+        }}
+        body {{
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            direction: rtl;
+            font-size: 12px;
+            color: #111827;
+        }}
+        .voucher-container {{
+            width: {container_width};
+            max-width: 100%;
+            margin: 0 auto;
+            padding: {container_padding};
+            background: #ffffff;
+        }}
+        .header {{
+            display: flex;
+            flex-direction: row-reverse;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #111827;
+            padding-bottom: 8px;
+            margin-bottom: 6px;
+        }}
+        .logo-box {{
+            width: 110px;
+            height: 75px;
+            border: 1.5px solid #374151;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px;
+        }}
+        .center-info {{ text-align: center; flex-grow: 1; }}
+        .center-title {{ font-size: 22px; font-weight: 900; margin: 0; color: #000000; }}
+        .center-ref {{ font-size: 15px; font-weight: bold; margin-top: 4px; color: #374151; direction: ltr; }}
+        .office-identity {{ text-align: right; max-width: 260px; }}
+        .office-name {{ font-size: 18px; font-weight: 900; color: #000000; margin: 0; }}
+        .office-tagline {{ font-size: 12px; font-weight: 700; color: #374151; margin: 2px 0; }}
+        .office-address {{ font-size: 10px; color: #4b5563; margin: 1px 0; }}
+        .office-phones {{ font-size: 10px; font-weight: bold; color: #1f2937; margin: 1px 0; direction: ltr; text-align: right; }}
+        .signatures {{ display: flex; justify-content: space-around; margin-top: 16px; padding-top: 8px; font-size: 11px; font-weight: bold; }}
+        .footer {{ text-align: center; font-size: 11px; font-weight: bold; color: #111827; margin-top: 10px; padding-top: 4px; border-top: 1.5px solid #111827; }}
+    </style>
+</head>
+<body onload="window.print()">
+    <div class="voucher-container">
+        <div class="header">
+            <div class="logo-box">{logo_content}</div>
+            <div class="center-info">
+                <h1 class="center-title">{title}</h1>
+                <div class="center-ref">رقم: {voucher.transaction_id}</div>
+            </div>
+            <div class="office-identity">
+                <div class="office-name">{office_settings.office_name}</div>
+                <div class="office-tagline">{office_settings.tagline}</div>
+                <div class="office-address">{office_settings.address}</div>
+                <div class="office-phones">{office_settings.phone_numbers}</div>
+            </div>
+        </div>
+        {table_html}
+        {alloc_html}
+        <div class="signatures">
+            <div>توقيع المستلم: ........................</div>
+            <div>أمين الصندوق / المحاسب: {issued_by_name}</div>
+            <div>الختم الرسمي</div>
+        </div>
+        <div class="footer">{office_settings.footer_text}</div>
+    </div>
+</body>
+</html>
+"""
+

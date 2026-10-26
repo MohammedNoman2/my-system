@@ -17,7 +17,7 @@ import { Button } from '../common/Button';
 
 const passportSchema = yup.object({
   // Step 1: Passport transaction details
-  passport_type: yup.string().oneOf(['new', 'renew', 'replace_lost', 'change_profession']).default('new'),
+  passport_type: yup.string().oneOf(['new', 'renewal', 'lost', 'damaged']).default('new'),
   priority: yup.string().oneOf(['normal', 'urgent']).default('normal'),
   application_date: yup.string().required('تاريخ التقديم مطلوب'),
   expected_delivery_date: yup.string().nullable().optional(),
@@ -171,9 +171,9 @@ export function PassportBookingForm({ onSuccess, onCancel }: PassportBookingForm
                 {...register('passport_type')}
               >
                 <option value="new">إصدار جواز جديد لأول مرة</option>
-                <option value="renew">تجديد جواز منتهي</option>
-                <option value="replace_lost">بدل فاقد أو تالف</option>
-                <option value="change_profession">تعديل مهنة أو بيانات</option>
+                <option value="renewal">تجديد جواز منتهي</option>
+                <option value="lost">بدل فاقد</option>
+                <option value="damaged">بدل تالف</option>
               </Select>
 
               <Select

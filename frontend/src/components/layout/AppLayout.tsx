@@ -2,7 +2,6 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Navbar } from './Navbar';
-import { ToastContainer } from '../common/Toast';
 
 export function AppLayout() {
   return (
@@ -20,9 +19,6 @@ export function AppLayout() {
           </div>
         </main>
       </div>
-
-      {/* Global Toast Notifications */}
-      <ToastContainer />
     </div>
   );
 }

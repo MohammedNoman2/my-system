@@ -1,6 +1,9 @@
 import os
+from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -18,7 +21,7 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "sqlite+aiosqlite:///./arp.db"
+        f"sqlite+aiosqlite:///{(BASE_DIR / 'arp.db').as_posix()}"
     )
 
     # Redis & Celery

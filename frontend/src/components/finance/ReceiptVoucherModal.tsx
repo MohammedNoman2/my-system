@@ -16,7 +16,7 @@ const receiptSchema = yup.object({
   entity_id: yup.number().positive('يرجى اختيار العميل أو المورد').required('الجهة مطلوبة'),
   amount: yup.number().positive('المبلغ يجب أن يكون أكبر من الصفر').required('المبلغ مطلوب'),
   currency: yup.string().default('YER'),
-  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'credit', 'cheque']).default('cash'),
+  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'check']).default('cash'),
   reference_document: yup.string().nullable().optional(),
   notes: yup.string().nullable().optional(),
   transaction_date: yup.string().required('تاريخ السند مطلوب'),
@@ -91,20 +91,18 @@ export function ReceiptVoucherModal({
 
   useEffect(() => {
     async function fetchBookings() {
-      if (!entityId) {
+      if (!entityId || entityType !== 'customer') {
         setUnpaidBookings([]);
         return;
       }
       try {
-        const endpoint = entityType === 'customer' 
-          ? `/bookings/?customer_id=${entityId}&status=pending,confirmed` 
-          : `/bookings/?supplier_id=${entityId}&status=pending,confirmed`;
-          
-        const res = await api.get(endpoint);
-        const filtered = res.data.filter((b: any) => b.remaining_amount > 0);
-        setUnpaidBookings(filtered);
+        const res = await api.get('/bookings/unpaid', {
+          params: { customer_id: entityId },
+        });
+        setUnpaidBookings(res.data || []);
       } catch (err) {
-        console.error('Failed to load bookings', err);
+        console.error('Failed to load unpaid bookings', err);
+        setUnpaidBookings([]);
       }
     }
     fetchBookings();
@@ -284,8 +282,7 @@ export function ReceiptVoucherModal({
           >
             <option value="cash">نقداً (الصندوق)</option>
             <option value="bank_transfer">حوالة / تحويل بنكي</option>
-            <option value="cheque">شيك مصرفي</option>
-            <option value="credit">آجل</option>
+            <option value="check">شيك مصرفي</option>
           </Select>
 
           <Input

@@ -36,7 +36,7 @@ export function BookingCancelModal({
     setIsLoading(true);
     try {
       await api.post(`/bookings/${booking.id}/cancel`, {
-        cancellation_reason: reason.trim(),
+        reason: reason.trim(),
         refund_amount: Number(refundAmount) || 0,
       });
       addToast('تم إلغاء الحجز وتحديث الأثر المالي ورصيد العميل بنجاح', 'success');

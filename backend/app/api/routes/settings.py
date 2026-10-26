@@ -349,11 +349,27 @@ async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(AuditLog)
+        select(AuditLog, User.username, User.full_name)
+        .outerjoin(User, AuditLog.user_id == User.id)
         .order_by(desc(AuditLog.timestamp))
         .offset(offset)
         .limit(limit)
     )
     res = await db.execute(stmt)
-    logs = res.scalars().all()
-    return logs
+    rows = res.all()
+    return [
+        {
+            "id": log.id,
+            "user_id": log.user_id,
+            "username": full_name or username or "النظام",
+            "action": log.action,
+            "table_name": log.table_name,
+            "record_id": log.record_id,
+            "old_data": log.old_data,
+            "new_data": log.new_data,
+            "ip_address": log.ip_address,
+            "user_agent": log.user_agent,
+            "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+        }
+        for log, username, full_name in rows
+    ]

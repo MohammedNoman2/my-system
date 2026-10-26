@@ -16,7 +16,7 @@ const paymentSchema = yup.object({
   entity_id: yup.number().positive('يرجى اختيار الجهة').required('الجهة مطلوبة'),
   amount: yup.number().positive('المبلغ يجب أن يكون أكبر من الصفر').required('المبلغ مطلوب'),
   currency: yup.string().default('YER'),
-  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'credit', 'cheque']).default('cash'),
+  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'check']).default('cash'),
   reference_document: yup.string().nullable().optional(),
   notes: yup.string().nullable().optional(),
   transaction_date: yup.string().required('تاريخ السند مطلوب'),
@@ -89,7 +89,7 @@ export function PaymentVoucherModal({
         amount: Number(values.amount),
         currency: values.currency,
         payment_method: values.payment_method,
-        reference_document: values.reference_document || null,
+        reference_number: values.reference_document || null,
         notes: values.notes || null,
         transaction_date: values.transaction_date,
       });
@@ -185,8 +185,7 @@ export function PaymentVoucherModal({
           >
             <option value="cash">نقداً (الصندوق)</option>
             <option value="bank_transfer">حوالة / تحويل بنكي</option>
-            <option value="cheque">شيك مصرفي</option>
-            <option value="credit">آجل</option>
+            <option value="check">شيك مصرفي</option>
           </Select>
 
           <Input

@@ -60,7 +60,7 @@ export interface VisaBookingDetail {
 }
 
 export interface PassportBookingDetail {
-  passport_type: 'new' | 'renew' | 'replace_lost' | 'change_profession';
+  passport_type: 'new' | 'renewal' | 'lost' | 'damaged';
   priority: 'normal' | 'urgent';
   application_date: string;
   expected_delivery_date?: string | null;
@@ -205,7 +205,7 @@ export interface FinancialTransaction {
   customer_id?: number | null;
   supplier_id?: number | null;
   booking_id?: number | null;
-  payment_method: 'cash' | 'bank_transfer' | 'credit' | 'cheque';
+  payment_method: 'cash' | 'bank_transfer' | 'check';
   reference_document?: string | null;
   notes?: string | null;
   transaction_date: string;

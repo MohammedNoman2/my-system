@@ -192,13 +192,13 @@ export function ShiftWidget() {
             {/* Summary */}
             <div className="grid grid-cols-3 gap-3 mb-5">
               {[
-                { label: 'رصيد الافتتاح', value: shiftState.shift.starting_balance, color: 'slate' },
-                { label: 'إجمالي المقبوض', value: shiftState.shift.total_in, color: 'emerald' },
-                { label: 'الرصيد الدفتري', value: shiftState.shift.current_system_balance, color: 'blue' },
+                { label: 'رصيد الافتتاح', value: shiftState.shift.starting_balance, boxClass: 'bg-slate-50 border-slate-100', labelClass: 'text-slate-600', valClass: 'text-slate-800' },
+                { label: 'إجمالي المقبوض', value: shiftState.shift.total_in, boxClass: 'bg-emerald-50 border-emerald-100', labelClass: 'text-emerald-600', valClass: 'text-emerald-800' },
+                { label: 'الرصيد الدفتري', value: shiftState.shift.current_system_balance, boxClass: 'bg-blue-50 border-blue-100', labelClass: 'text-blue-600', valClass: 'text-blue-800' },
               ].map((item) => (
-                <div key={item.label} className={`bg-${item.color}-50 border border-${item.color}-100 rounded-xl p-3 text-center`}>
-                  <p className={`text-[10px] text-${item.color}-600 font-medium mb-1`}>{item.label}</p>
-                  <p className={`text-sm font-bold text-${item.color}-800`}>
+                <div key={item.label} className={`${item.boxClass} border rounded-xl p-3 text-center`}>
+                  <p className={`text-[10px] ${item.labelClass} font-medium mb-1`}>{item.label}</p>
+                  <p className={`text-sm font-bold ${item.valClass}`}>
                     {item.value.toLocaleString()}
                   </p>
                   <p className="text-[9px] text-slate-400">YER</p>

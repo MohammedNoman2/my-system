@@ -51,7 +51,7 @@ export function BookingList() {
     setIsLoading(true);
     try {
       const params: any = { limit: 100 };
-      if (typeFilter !== 'all') params.type = typeFilter;
+      if (typeFilter !== 'all') params.booking_type = typeFilter;
       if (searchQuery.trim()) params.search = searchQuery.trim();
 
       const res = await api.get('/bookings/', { params });

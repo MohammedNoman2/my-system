@@ -14,7 +14,7 @@ const expenseSchema = yup.object({
   expense_type: yup.string().required('نوع وبند المصروف مطلوب (نص حر)'),
   amount: yup.number().positive('المبلغ يجب أن يكون أكبر من الصفر').required('المبلغ مطلوب'),
   currency: yup.string().default('YER'),
-  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'credit', 'cheque']).default('cash'),
+  payment_method: yup.string().oneOf(['cash', 'bank_transfer', 'check']).default('cash'),
   reference_number: yup.string().nullable().optional(),
   notes: yup.string().nullable().optional(),
   transaction_date: yup.string().required('تاريخ المصروف مطلوب'),
@@ -115,8 +115,7 @@ export function ExpenseModal({ isOpen, onClose, onSuccess }: ExpenseModalProps) 
           >
             <option value="cash">نقداً (الصندوق)</option>
             <option value="bank_transfer">تحويل بنكي</option>
-            <option value="cheque">شيك</option>
-            <option value="credit">آجل</option>
+            <option value="check">شيك مصرفي</option>
           </Select>
 
           <Input

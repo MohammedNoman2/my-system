@@ -77,16 +77,16 @@ export function BookingDashboard() {
       <h3 className="text-lg font-bold text-slate-800">حجوزات اليوم حسب النوع</h3>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {[
-          { label: 'طيران', icon: Plane, color: 'blue', key: 'flight' },
-          { label: 'نقل بري', icon: Bus, color: 'amber', key: 'transport' },
-          { label: 'تأشيرات', icon: Stamp, color: 'purple', key: 'visa' },
-          { label: 'جوازات', icon: BookOpen, color: 'emerald', key: 'passport' },
-          { label: 'طرود', icon: Package, color: 'orange', key: 'parcel' },
+          { label: 'طيران', icon: Plane, boxClass: 'bg-blue-50 border-blue-100', iconClass: 'text-blue-600', labelClass: 'text-blue-900', countClass: 'text-blue-700', key: 'flight' },
+          { label: 'نقل بري', icon: Bus, boxClass: 'bg-amber-50 border-amber-100', iconClass: 'text-amber-600', labelClass: 'text-amber-900', countClass: 'text-amber-700', key: 'transport' },
+          { label: 'تأشيرات', icon: Stamp, boxClass: 'bg-purple-50 border-purple-100', iconClass: 'text-purple-600', labelClass: 'text-purple-900', countClass: 'text-purple-700', key: 'visa' },
+          { label: 'جوازات', icon: BookOpen, boxClass: 'bg-emerald-50 border-emerald-100', iconClass: 'text-emerald-600', labelClass: 'text-emerald-900', countClass: 'text-emerald-700', key: 'passport' },
+          { label: 'طرود', icon: Package, boxClass: 'bg-orange-50 border-orange-100', iconClass: 'text-orange-600', labelClass: 'text-orange-900', countClass: 'text-orange-700', key: 'parcel' },
         ].map((item, idx) => (
-          <div key={idx} className={`bg-${item.color}-50 border border-${item.color}-100 p-4 rounded-xl flex flex-col items-center justify-center`}>
-            <item.icon className={`w-6 h-6 text-${item.color}-600 mb-2`} />
-            <span className={`text-sm font-bold text-${item.color}-900`}>{item.label}</span>
-            <span className={`text-xl font-black text-${item.color}-700 mt-1`}>{stats.counts[item.key as keyof typeof stats.counts]}</span>
+          <div key={idx} className={`${item.boxClass} border p-4 rounded-xl flex flex-col items-center justify-center`}>
+            <item.icon className={`w-6 h-6 ${item.iconClass} mb-2`} />
+            <span className={`text-sm font-bold ${item.labelClass}`}>{item.label}</span>
+            <span className={`text-xl font-black ${item.countClass} mt-1`}>{stats.counts[item.key as keyof typeof stats.counts]}</span>
           </div>
         ))}
       </div>
