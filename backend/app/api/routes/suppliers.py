@@ -12,6 +12,7 @@ from app.schemas.supplier import (
     SupplierUpdate,
 )
 from app.utils.audit import log_audit_event
+from app.services.accounting_service import create_entity_accounts
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
 
@@ -50,6 +51,8 @@ async def create_supplier(
     supplier = Supplier(**data.model_dump())
     db.add(supplier)
     await db.flush()
+
+    await create_entity_accounts(db, "supplier", supplier.id, supplier.name)
 
     await log_audit_event(
         db,

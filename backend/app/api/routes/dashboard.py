@@ -32,7 +32,7 @@ async def get_dashboard_summary(
         bookings_q = bookings_q.where(Booking.employee_id == current_user.id)
 
     res = await db.execute(bookings_q)
-    all_bookings = res.scalars().all()
+    all_bookings = [b for b in res.scalars().all() if b.status != BookingStatus.CANCELLED]
 
     total_bookings_count = len(all_bookings)
     today_bookings = [
@@ -60,10 +60,11 @@ async def get_dashboard_summary(
     total_cost = sum(b.cost_price for b in all_bookings)
     gross_profit = total_sales - total_cost
 
-    # Expenses query
+    # Expenses query (exclude voided expenses)
     exp_res = await db.execute(
         select(func.sum(FinancialTransaction.amount)).where(
-            FinancialTransaction.type == TransactionType.EXPENSE
+            FinancialTransaction.type == TransactionType.EXPENSE,
+            FinancialTransaction.is_void == False,
         )
     )
     total_expenses = exp_res.scalar() or Decimal("0.00")

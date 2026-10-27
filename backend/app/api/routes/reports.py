@@ -13,6 +13,7 @@ from app.models.financial import FinancialTransaction, TransactionType
 from app.models.supplier import Supplier
 from app.models.user import User, UserRole
 from app.schemas.report import ReportFilter, ReportSummary
+from app.services.accounting_service import sync_all_entity_balances
 from app.services.export_service import export_report_to_excel, export_report_to_pdf
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -86,7 +87,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 2. Revenue Report
     elif filters.report_type == "revenue":
-        stmt = select(Booking)
+        stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED)
         if filters.start_date:
             stmt = stmt.where(func.date(Booking.booking_date) >= filters.start_date)
         if filters.end_date:
@@ -127,7 +128,10 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 3. Expenses Report
     elif filters.report_type == "expenses":
-        stmt = select(FinancialTransaction).where(FinancialTransaction.type == TransactionType.EXPENSE)
+        stmt = select(FinancialTransaction).where(
+            FinancialTransaction.type == TransactionType.EXPENSE,
+            FinancialTransaction.is_void == False,
+        )
         if filters.start_date:
             stmt = stmt.where(FinancialTransaction.transaction_date >= filters.start_date)
         if filters.end_date:
@@ -161,7 +165,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 4. Profit & Loss Report
     elif filters.report_type == "profit_loss":
-        b_stmt = select(Booking)
+        b_stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED)
         if filters.start_date:
             b_stmt = b_stmt.where(func.date(Booking.booking_date) >= filters.start_date)
         if filters.end_date:
@@ -169,7 +173,10 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
         b_res = await db.execute(b_stmt)
         bookings = b_res.scalars().all()
 
-        e_stmt = select(FinancialTransaction).where(FinancialTransaction.type == TransactionType.EXPENSE)
+        e_stmt = select(FinancialTransaction).where(
+            FinancialTransaction.type == TransactionType.EXPENSE,
+            FinancialTransaction.is_void == False,
+        )
         if filters.start_date:
             e_stmt = e_stmt.where(FinancialTransaction.transaction_date >= filters.start_date)
         if filters.end_date:
@@ -201,6 +208,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 5. Debts Report
     elif filters.report_type == "debts":
+        await sync_all_entity_balances(db)
         cust_res = await db.execute(select(Customer).where(Customer.balance > 0))
         custs = cust_res.scalars().all()
         supp_res = await db.execute(select(Supplier).where(Supplier.balance != 0))
@@ -234,7 +242,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 6. Employee Performance Report
     elif filters.report_type == "employee_performance":
-        b_stmt = select(Booking).options(selectinload(Booking.employee))
+        b_stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED).options(selectinload(Booking.employee))
         if filters.start_date:
             b_stmt = b_stmt.where(func.date(Booking.booking_date) >= filters.start_date)
         if filters.end_date:
@@ -272,7 +280,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
 
     # 7. Cash Flow Report
     elif filters.report_type == "cash_flow":
-        stmt = select(FinancialTransaction)
+        stmt = select(FinancialTransaction).where(FinancialTransaction.is_void == False)
         if filters.start_date:
             stmt = stmt.where(FinancialTransaction.transaction_date >= filters.start_date)
         if filters.end_date:

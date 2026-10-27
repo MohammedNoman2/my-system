@@ -41,6 +41,7 @@ from app.services.accounting_service import (
     get_entity_account,
     get_entity_balance,
 )
+from app.services.shift_service import get_active_shift
 from app.utils.audit import log_audit_event
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
@@ -333,11 +334,16 @@ async def create_booking(
         lines_data=je_lines,
     )
 
-    # Sync dynamic balance
-    customer.balance = await get_entity_balance(db, "customer", customer.id, curr_str)
+    # Sync dynamic balance (unified base currency across all sub-accounts)
+    customer.balance = await get_entity_balance(db, "customer", customer.id)
+    if resolved_supplier_id:
+        supp_obj = await db.get(Supplier, resolved_supplier_id)
+        if supp_obj:
+            supp_obj.balance = await get_entity_balance(db, "supplier", supp_obj.id)
 
-    # If paid_amount > 0, record receipt voucher
+    # If paid_amount > 0, record receipt voucher and link to active cash shift
     if data.paid_amount > 0:
+        active_shift = await get_active_shift(db, current_user.id, raise_if_none=False)
         rc_ref = await get_next_reference_number(db, "RC")
         payment_record = FinancialTransaction(
             transaction_id=rc_ref,
@@ -351,6 +357,7 @@ async def create_booking(
             transaction_date=date.today(),
             booking_id=booking.id,
             created_by=current_user.id,
+            shift_id=active_shift.id if active_shift else None,
         )
         db.add(payment_record)
 
@@ -771,14 +778,22 @@ async def cancel_booking(
     if booking.status == BookingStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="الحجز ملغي مسبقاً")
 
+    if data.refund_amount > booking.paid_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"المبلغ المسترد ({data.refund_amount}) لا يمكن أن يتجاوز المبلغ المدفوع ({booking.paid_amount})",
+        )
+
     now = datetime.now(timezone.utc)
     old_data = {"status": booking.status.value, "paid": float(booking.paid_amount)}
+    orig_remaining = booking.remaining_amount
 
     booking.status = BookingStatus.CANCELLED
     booking.cancelled_at = now
     booking.cancelled_by = current_user.id
     booking.cancellation_reason = data.reason
     booking.refund_amount = data.refund_amount
+    booking.remaining_amount = Decimal("0.00")
 
     customer = booking.customer
 
@@ -797,9 +812,9 @@ async def cancel_booking(
     ]
 
     # Credit Customer AR for remaining debt being cancelled
-    if booking.remaining_amount > 0:
+    if orig_remaining > 0:
         cancel_lines.append(
-            {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": booking.remaining_amount}
+            {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": orig_remaining}
         )
 
     # Credit Cash for the refund paid back to the customer
@@ -837,10 +852,15 @@ async def cancel_booking(
     )
 
     if customer:
-        customer.balance = await get_entity_balance(db, "customer", customer.id, curr_str)
+        customer.balance = await get_entity_balance(db, "customer", customer.id)
+    if booking.supplier_id:
+        supp_obj = await db.get(Supplier, booking.supplier_id)
+        if supp_obj:
+            supp_obj.balance = await get_entity_balance(db, "supplier", supp_obj.id)
 
-    # If money is refunded back to customer, record payment_out
+    # If money is refunded back to customer, record payment_out and link to active shift
     if data.refund_amount > 0 and customer:
+        active_shift = await get_active_shift(db, current_user.id, raise_if_none=False)
         py_ref = await get_next_reference_number(db, "PY")
         refund_record = FinancialTransaction(
             transaction_id=py_ref,
@@ -854,6 +874,7 @@ async def cancel_booking(
             transaction_date=date.today(),
             booking_id=booking.id,
             created_by=current_user.id,
+            shift_id=active_shift.id if active_shift else None,
         )
         db.add(refund_record)
 
@@ -1028,7 +1049,7 @@ async def reroute_booking(
             lines_data=adj_lines,
         )
         if booking.customer:
-            booking.customer.balance = await get_entity_balance(db, "customer", booking.customer.id, curr_str)
+            booking.customer.balance = await get_entity_balance(db, "customer", booking.customer.id)
 
     if data.reason:
         booking.notes = (booking.notes + " | " if booking.notes else "") + f"تغيير المسار: {data.reason}"

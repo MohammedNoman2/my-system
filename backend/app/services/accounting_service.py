@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select, func
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.accounting import (
     Account,
@@ -292,26 +292,49 @@ async def get_entity_balance(
 ) -> Decimal:
     """
     Calculates dynamic entity balance from the immutable General Ledger.
-    For Customer (AR): sum(debit) - sum(credit)
-    For Supplier (AP): sum(credit) - sum(debit)
+    - When `currency` is specified: returns balance in that exact currency (sum(debit) vs sum(credit)).
+    - When `currency` is None: returns unified base-currency (YER) balance across all sub-accounts
+      using debit_base / credit_base (falling back to debit / credit if base is 0).
+    For Customer (AR): Debit - Credit
+    For Supplier (AP): Credit - Debit
     """
     ent_type_enum = (
         EntityAccountType.CUSTOMER if entity_type.lower() == "customer" else EntityAccountType.SUPPLIER
     )
-    
-    stmt = (
-        select(
-            func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000")),
-            func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
-        )
-        .join(Account, JournalEntryLine.account_id == Account.id)
-        .where(
-            Account.entity_type == ent_type_enum,
-            Account.entity_id == entity_id,
-        )
-    )
+
     if currency:
-        stmt = stmt.where(Account.currency == AccountCurrency(currency))
+        stmt = (
+            select(
+                func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000")),
+                func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
+            )
+            .join(Account, JournalEntryLine.account_id == Account.id)
+            .where(
+                Account.entity_type == ent_type_enum,
+                Account.entity_id == entity_id,
+                Account.currency == AccountCurrency(currency),
+            )
+        )
+    else:
+        debit_expr = case(
+            (JournalEntryLine.debit_base > 0, JournalEntryLine.debit_base),
+            else_=JournalEntryLine.debit,
+        )
+        credit_expr = case(
+            (JournalEntryLine.credit_base > 0, JournalEntryLine.credit_base),
+            else_=JournalEntryLine.credit,
+        )
+        stmt = (
+            select(
+                func.coalesce(func.sum(debit_expr), Decimal("0.0000")),
+                func.coalesce(func.sum(credit_expr), Decimal("0.0000")),
+            )
+            .join(Account, JournalEntryLine.account_id == Account.id)
+            .where(
+                Account.entity_type == ent_type_enum,
+                Account.entity_id == entity_id,
+            )
+        )
 
     res = await session.execute(stmt)
     total_debit, total_credit = res.one()
@@ -320,6 +343,29 @@ async def get_entity_balance(
         return (Decimal(str(total_debit)) - Decimal(str(total_credit))).quantize(Decimal("0.01"))
     else:
         return (Decimal(str(total_credit)) - Decimal(str(total_debit))).quantize(Decimal("0.01"))
+
+
+async def sync_all_entity_balances(session: AsyncSession) -> dict:
+    """
+    Recalculates and synchronizes `customer.balance` and `supplier.balance`
+    for all records in the database from the immutable General Ledger.
+    """
+    from app.models.customer import Customer
+    from app.models.supplier import Supplier
+
+    cust_res = await session.execute(select(Customer))
+    customers = cust_res.scalars().all()
+    for c in customers:
+        c.balance = await get_entity_balance(session, "customer", c.id)
+
+    supp_res = await session.execute(select(Supplier))
+    suppliers = supp_res.scalars().all()
+    for s in suppliers:
+        s.balance = await get_entity_balance(session, "supplier", s.id)
+
+    await session.flush()
+    return {"customers_synced": len(customers), "suppliers_synced": len(suppliers)}
+
 
 
 async def get_cash_balance_with_lock(

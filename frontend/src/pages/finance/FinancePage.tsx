@@ -48,6 +48,17 @@ export function FinancePage() {
     }
   };
 
+  const handleVoidVoucher = async (tx: FinancialTransaction) => {
+    const reason = window.prompt(`يرجى إدخال سبب إلغاء السند رقم ${tx.transaction_id}:`);
+    if (!reason || !reason.trim()) return;
+    try {
+      await api.post(`/finance/vouchers/${tx.id}/void`, { void_reason: reason.trim() });
+      await fetchTransactions();
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'تعذر إلغاء السند المالي');
+    }
+  };
+
   useEffect(() => {
     fetchTransactions();
   }, [typeFilter, startDate, endDate]);
@@ -67,14 +78,15 @@ export function FinancePage() {
     credit: 'آجل',
   };
 
-  // Quick stats
-  const totalIn = transactions
+  // Quick stats (exclude voided transactions)
+  const activeTransactions = transactions.filter((t) => !t.is_void);
+  const totalIn = activeTransactions
     .filter((t) => t.type === 'payment_in')
     .reduce((acc, t) => acc + Number(t.amount), 0);
-  const totalOut = transactions
+  const totalOut = activeTransactions
     .filter((t) => t.type === 'payment_out')
     .reduce((acc, t) => acc + Number(t.amount), 0);
-  const totalExpenses = transactions
+  const totalExpenses = activeTransactions
     .filter((t) => t.type === 'expense')
     .reduce((acc, t) => acc + Number(t.amount), 0);
 
@@ -227,6 +239,7 @@ export function FinancePage() {
                   <th className="px-4 py-3">طريقة الدفع</th>
                   <th className="px-4 py-3">رقم المرجع</th>
                   <th className="px-4 py-3">ملاحظات</th>
+                  <th className="px-4 py-3 text-center">الحالة / إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -269,6 +282,23 @@ export function FinancePage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500 max-w-xs truncate">
                       {tx.notes || '--'}
+                    </td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      {tx.is_void ? (
+                        <span
+                          className="inline-block text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-red-100 text-red-700"
+                          title={tx.void_reason || 'سند ملغي'}
+                        >
+                          ملغي
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleVoidVoucher(tx)}
+                          className="text-xs font-bold text-rose-600 hover:text-rose-800 px-2 py-1 rounded-lg hover:bg-rose-50 transition-colors"
+                        >
+                          إلغاء السند
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

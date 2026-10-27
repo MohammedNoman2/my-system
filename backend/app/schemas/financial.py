@@ -55,6 +55,11 @@ class FinancialTransactionResponse(BaseModel):
     booking_id: Optional[int] = None
     is_reconciled: bool
     reconciled_at: Optional[datetime] = None
+    is_void: bool = False
+    voided_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
+    reversal_je_number: Optional[str] = None
+    shift_id: Optional[int] = None
     created_by: int
     created_at: datetime
     updated_at: datetime

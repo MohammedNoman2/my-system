@@ -13,6 +13,7 @@ from app.schemas.customer import (
     CustomerUpdate,
 )
 from app.utils.audit import log_audit_event
+from app.services.accounting_service import create_entity_accounts
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
@@ -86,6 +87,8 @@ async def create_customer(
     customer = Customer(**data.model_dump())
     db.add(customer)
     await db.flush()
+
+    await create_entity_accounts(db, "customer", customer.id, customer.name)
 
     await log_audit_event(
         db,

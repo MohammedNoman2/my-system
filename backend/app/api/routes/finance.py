@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user, require_accountant_or_admin
 from app.core.database import get_db
 from app.models.accounting import AccountCurrency
-from app.models.booking import Booking
+from app.models.booking import Booking, BookingStatus
 from app.models.cash_shift import CashShift, ShiftStatus
 from app.models.customer import Customer
 from app.models.financial import (
@@ -134,12 +134,16 @@ async def get_active_shift_status(
         select(func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0")))
         .where(FinancialTransaction.shift_id == shift.id,
                FinancialTransaction.type == TransactionType.PAYMENT_IN,
+               FinancialTransaction.payment_method == PaymentMethod.CASH,
+               FinancialTransaction.currency == "YER",
                FinancialTransaction.is_void == False)
     )
     cash_out = await db.execute(
         select(func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0")))
         .where(FinancialTransaction.shift_id == shift.id,
                FinancialTransaction.type.in_([TransactionType.PAYMENT_OUT, TransactionType.EXPENSE]),
+               FinancialTransaction.payment_method == PaymentMethod.CASH,
+               FinancialTransaction.currency == "YER",
                FinancialTransaction.is_void == False)
     )
     total_in = cash_in.scalar() or Decimal("0")
@@ -275,9 +279,9 @@ async def create_receipt_voucher(
         ])
 
     if data.entity_type == EntityType.CUSTOMER:
-        customer.balance = await get_entity_balance(db, "customer", customer.id, data.currency)
+        customer.balance = await get_entity_balance(db, "customer", customer.id)
     elif data.entity_type == EntityType.SUPPLIER:
-        supplier.balance = await get_entity_balance(db, "supplier", supplier.id, data.currency)
+        supplier.balance = await get_entity_balance(db, "supplier", supplier.id)
 
     await log_audit_event(db, "INSERT", "financial_transactions", user=current_user,
         new_data={"transaction_id": ref_num, "type": "payment_in", "amount": float(data.amount)}, request=request)
@@ -304,8 +308,9 @@ async def create_receipt_voucher_v2(
     # ─── Shift Check ───────────────────────────────────────────────────────
     shift_id = None
     if data.payment_method == PaymentMethod.CASH:
-        shift = await get_active_shift(db, current_user.id, raise_if_none=True)
-        shift_id = shift.id
+        shift = await get_active_shift(db, current_user.id, raise_if_none=False)
+        if shift:
+            shift_id = shift.id
 
     # ─── Validate totals ───────────────────────────────────────────────────
     total_allocated = sum(a.allocated_amount for a in data.allocations)
@@ -456,9 +461,9 @@ async def create_receipt_voucher_v2(
 
     # تحديث رصيد الكيان
     if customer:
-        customer.balance = await get_entity_balance(db, "customer", customer.id, data.currency)
+        customer.balance = await get_entity_balance(db, "customer", customer.id)
     if supplier:
-        supplier.balance = await get_entity_balance(db, "supplier", supplier.id, data.currency)
+        supplier.balance = await get_entity_balance(db, "supplier", supplier.id)
 
     await log_audit_event(db, "INSERT", "financial_transactions", user=current_user,
         new_data={"transaction_id": ref_num, "type": "payment_in",
@@ -513,13 +518,11 @@ async def create_payment_voucher(
         if not supplier:
             raise HTTPException(status_code=404, detail="المورد غير موجود")
         entity_name = supplier.name
-        supplier.balance = (supplier.balance or Decimal("0.00")) + Decimal(str(data.amount))
     elif data.entity_type == EntityType.CUSTOMER:
         customer = (await db.execute(select(Customer).where(Customer.id == data.entity_id))).scalar_one_or_none()
         if not customer:
             raise HTTPException(status_code=404, detail="العميل غير موجود")
         entity_name = customer.name
-        customer.balance = (customer.balance or Decimal("0.00")) + Decimal(str(data.amount))
 
     tx = FinancialTransaction(
         transaction_id=ref_num, type=TransactionType.PAYMENT_OUT,
@@ -547,9 +550,9 @@ async def create_payment_voucher(
         ])
 
     if supplier:
-        supplier.balance = await get_entity_balance(db, "supplier", supplier.id, data.currency)
+        supplier.balance = await get_entity_balance(db, "supplier", supplier.id)
     elif customer:
-        customer.balance = await get_entity_balance(db, "customer", customer.id, data.currency)
+        customer.balance = await get_entity_balance(db, "customer", customer.id)
 
     await log_audit_event(db, "INSERT", "financial_transactions", user=current_user,
         new_data={"transaction_id": ref_num, "type": "payment_out", "amount": float(data.amount)}, request=request)
@@ -719,15 +722,14 @@ async def void_voucher(
 
     # Update entity balance
     if voucher.entity_id:
-        entity_type_str = "customer" if voucher.entity_type == EntityType.CUSTOMER else "supplier"
         if voucher.entity_type == EntityType.CUSTOMER:
             cust = await db.get(Customer, voucher.entity_id)
             if cust:
-                cust.balance = await get_entity_balance(db, "customer", cust.id, voucher.currency)
+                cust.balance = await get_entity_balance(db, "customer", cust.id)
         elif voucher.entity_type == EntityType.SUPPLIER:
             supp = await db.get(Supplier, voucher.entity_id)
             if supp:
-                supp.balance = await get_entity_balance(db, "supplier", supp.id, voucher.currency)
+                supp.balance = await get_entity_balance(db, "supplier", supp.id)
 
     await log_audit_event(db, "UPDATE", "financial_transactions", user=current_user,
         record_id=voucher.id,
@@ -929,13 +931,17 @@ async def get_customer_ledger(
     if not cust:
         raise HTTPException(status_code=404, detail="العميل غير موجود")
     bookings_res = await db.execute(
-        select(Booking).where(Booking.customer_id == customer_id).order_by(Booking.booking_date)
+        select(Booking).where(
+            Booking.customer_id == customer_id,
+            Booking.status != BookingStatus.CANCELLED,
+        ).order_by(Booking.booking_date)
     )
     bookings = bookings_res.scalars().all()
     txs_res = await db.execute(
         select(FinancialTransaction).options(selectinload(FinancialTransaction.allocations)).where(
             FinancialTransaction.entity_type == EntityType.CUSTOMER,
             FinancialTransaction.entity_id == customer_id,
+            FinancialTransaction.is_void == False,
         ).order_by(FinancialTransaction.transaction_date)
     )
     txs = txs_res.scalars().all()
@@ -1005,13 +1011,17 @@ async def get_supplier_ledger(
     if not supp:
         raise HTTPException(status_code=404, detail="المورد غير موجود")
     bookings_res = await db.execute(
-        select(Booking).where(Booking.supplier_id == supplier_id).order_by(Booking.booking_date)
+        select(Booking).where(
+            Booking.supplier_id == supplier_id,
+            Booking.status != BookingStatus.CANCELLED,
+        ).order_by(Booking.booking_date)
     )
     bookings = bookings_res.scalars().all()
     txs_res = await db.execute(
         select(FinancialTransaction).options(selectinload(FinancialTransaction.allocations)).where(
             FinancialTransaction.entity_type == EntityType.SUPPLIER,
             FinancialTransaction.entity_id == supplier_id,
+            FinancialTransaction.is_void == False,
         ).order_by(FinancialTransaction.transaction_date)
     )
     txs = txs_res.scalars().all()
@@ -1057,7 +1067,7 @@ async def get_supplier_ledger(
         if curr not in ledgers_by_currency:
             ledgers_by_currency[curr] = {"entries": [], "balance": Decimal("0.00")}
         
-        ledgers_by_currency[curr]["balance"] += ev["debit"] - ev["credit"]
+        ledgers_by_currency[curr]["balance"] += ev["credit"] - ev["debit"]
         ledgers_by_currency[curr]["entries"].append(LedgerEntryResponse(
             id=ev["id"], date=ev["date"], description=ev["description"],
             reference_id=ev["reference_id"], debit=ev["debit"], credit=ev["credit"],

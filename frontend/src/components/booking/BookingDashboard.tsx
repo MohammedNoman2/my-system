@@ -23,6 +23,7 @@ export function BookingDashboard() {
         const todayStr = new Date().toISOString().split('T')[0];
 
         bookings.forEach((b: any) => {
+          if (b.status === 'cancelled') return;
           const curr = b.currency || 'YER';
           // Check if booked today
           const bDate = b.booking_date?.split('T')[0];
