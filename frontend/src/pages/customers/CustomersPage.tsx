@@ -7,6 +7,7 @@ import {
   FileText,
   ArrowDownLeft,
   BookOpen,
+  Edit3,
 } from 'lucide-react';
 import api from '../../services/api';
 import type { Customer } from '../../types';
@@ -37,6 +38,19 @@ export function CustomersPage() {
     notes: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit customer modal
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [editCustomerForm, setEditCustomerForm] = useState({
+    name: '',
+    phone_number: '',
+    email: '',
+    passport_number: '',
+    id_number: '',
+    nationality: 'يمني',
+    address: '',
+    notes: '',
+  });
 
   // Details / Ledger modal
   const [ledgerCustomerId, setLedgerCustomerId] = useState<number | null>(null);
@@ -104,6 +118,51 @@ export function CustomersPage() {
       fetchCustomers();
     } catch (err: any) {
       const msg = err.response?.data?.detail || 'فشل حفظ بيانات العميل';
+      addToast(msg, 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const openEditCustomer = (c: Customer) => {
+    setEditingCustomer(c);
+    setEditCustomerForm({
+      name: c.name || '',
+      phone_number: c.phone_number || '',
+      email: c.email || '',
+      passport_number: c.passport_number || '',
+      id_number: c.id_number || '',
+      nationality: c.nationality || 'يمني',
+      address: c.address || '',
+      notes: c.notes || '',
+    });
+  };
+
+  const handleEditCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomer) return;
+    if (!editCustomerForm.name || !editCustomerForm.phone_number) {
+      addToast('الاسم ورقم الهاتف مطلوبان', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await api.put(`/customers/${editingCustomer.id}`, {
+        name: editCustomerForm.name,
+        phone_number: editCustomerForm.phone_number,
+        email: editCustomerForm.email || null,
+        passport_number: editCustomerForm.passport_number || null,
+        id_number: editCustomerForm.id_number || null,
+        nationality: editCustomerForm.nationality || null,
+        address: editCustomerForm.address || null,
+        notes: editCustomerForm.notes || null,
+      });
+      addToast('تم تحديث بيانات العميل بنجاح', 'success');
+      setEditingCustomer(null);
+      fetchCustomers();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'فشل تحديث بيانات العميل';
       addToast(msg, 'error');
     } finally {
       setIsSubmitting(false);
@@ -227,6 +286,14 @@ export function CustomersPage() {
                           <ArrowDownLeft className="w-3.5 h-3.5" />
                           <span>سند قبض</span>
                         </button>
+                        <button
+                          onClick={() => openEditCustomer(c)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                          title="تعديل بيانات العميل"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>تعديل</span>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -305,6 +372,73 @@ export function CustomersPage() {
             </Button>
             <Button type="submit" variant="primary" isLoading={isSubmitting}>
               حفظ العميل
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Edit Customer Modal */}
+      <Modal
+        isOpen={!!editingCustomer}
+        onClose={() => setEditingCustomer(null)}
+        title="تعديل بيانات العميل"
+        description="تحديث البيانات الشخصية ومعلومات التواصل للعميل"
+        size="md"
+      >
+        <form onSubmit={handleEditCustomer} className="space-y-4">
+          <Input
+            label="اسم العميل الكامل"
+            required
+            value={editCustomerForm.name}
+            onChange={(e) => setEditCustomerForm({ ...editCustomerForm, name: e.target.value })}
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="رقم الهاتف"
+              required
+              value={editCustomerForm.phone_number}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, phone_number: e.target.value })}
+            />
+
+            <Input
+              label="البريد الإلكتروني (اختياري)"
+              type="email"
+              value={editCustomerForm.email}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, email: e.target.value })}
+            />
+
+            <Input
+              label="رقم الجواز"
+              value={editCustomerForm.passport_number}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, passport_number: e.target.value })}
+            />
+
+            <Input
+              label="رقم البطاقة الشخصية"
+              value={editCustomerForm.id_number}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, id_number: e.target.value })}
+            />
+
+            <Input
+              label="الجنسية"
+              value={editCustomerForm.nationality}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, nationality: e.target.value })}
+            />
+
+            <Input
+              label="العنوان / المدينة"
+              value={editCustomerForm.address}
+              onChange={(e) => setEditCustomerForm({ ...editCustomerForm, address: e.target.value })}
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            <Button type="button" variant="ghost" onClick={() => setEditingCustomer(null)}>
+              إلغاء
+            </Button>
+            <Button type="submit" variant="primary" isLoading={isSubmitting}>
+              حفظ التعديلات
             </Button>
           </div>
         </form>

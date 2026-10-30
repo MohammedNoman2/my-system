@@ -69,6 +69,20 @@ def format_booking_response(full_booking: Booking, role: UserRole):
     return resp
 
 
+def check_employee_24h_window(booking: Booking, current_user: User, action_label: str = "تعديل أو إلغاء"):
+    """Enforces the 24-hour modification/cancellation window for EMPLOYEE role."""
+    if current_user.role == UserRole.EMPLOYEE and booking.created_at:
+        created_dt = booking.created_at
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        elapsed_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600.0
+        if elapsed_hours > 24.0:
+            raise HTTPException(
+                status_code=403,
+                detail=f"لا يمكن للموظف {action_label} الحجز بعد مرور 24 ساعة على إنشائه؛ يرجى مراجعة مدير النظام",
+            )
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_booking(
     data: BookingCreate,
@@ -774,6 +788,7 @@ async def cancel_booking(
 
     if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail="لا يمكنك إلغاء حجز تابع لموظف آخر")
+    check_employee_24h_window(booking, current_user, "إلغاء")
 
     if booking.status == BookingStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="الحجز ملغي مسبقاً")
@@ -918,6 +933,7 @@ async def postpone_booking(
 
     if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail="لا يمكنك تعديل حجز تابع لموظف آخر")
+    check_employee_24h_window(booking, current_user, "تأجيل")
 
     if booking.status == BookingStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="لا يمكن تأجيل حجز ملغي")
@@ -990,6 +1006,7 @@ async def reroute_booking(
 
     if current_user.role == UserRole.EMPLOYEE and booking.employee_id != current_user.id:
         raise HTTPException(status_code=403, detail="لا يمكنك تعديل حجز تابع لموظف آخر")
+    check_employee_24h_window(booking, current_user, "تغيير مسار")
 
     if booking.status == BookingStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="لا يمكن تغيير مسار حجز ملغي")

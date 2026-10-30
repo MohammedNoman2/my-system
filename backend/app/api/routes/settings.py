@@ -43,6 +43,7 @@ async def get_public_settings(
 
 @router.get("/office", response_model=SettingsResponse)
 async def get_office_settings(
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     res = await db.execute(select(Settings).limit(1))

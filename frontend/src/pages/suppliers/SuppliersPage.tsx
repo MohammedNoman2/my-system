@@ -5,6 +5,8 @@ import {
   RefreshCw,
   ArrowUpRight,
   BookOpen,
+  Search,
+  Edit3,
 } from 'lucide-react';
 import api from '../../services/api';
 import type { Supplier } from '../../types';
@@ -20,6 +22,7 @@ import { PaymentVoucherModal } from '../../components/finance/PaymentVoucherModa
 export function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Add modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -30,6 +33,15 @@ export function SuppliersPage() {
     address: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit modal
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [editSupplierForm, setEditSupplierForm] = useState({
+    name: '',
+    phone_number: '',
+    service_type: 'طيران',
+    address: '',
+  });
 
   // Ledger modal
   const [ledgerSupplierId, setLedgerSupplierId] = useState<number | null>(null);
@@ -43,12 +55,56 @@ export function SuppliersPage() {
   const fetchSuppliers = async () => {
     setIsLoading(true);
     try {
-      const res = await api.get('/suppliers/?limit=100');
+      const params: any = { limit: 100 };
+      if (searchQuery.trim()) params.search = searchQuery.trim();
+      const res = await api.get('/suppliers/', { params });
       setSuppliers(res.data);
     } catch (err) {
       console.error('Failed to load suppliers', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    fetchSuppliers();
+  };
+
+  const openEditSupplier = (s: Supplier) => {
+    setEditingSupplier(s);
+    setEditSupplierForm({
+      name: s.name || '',
+      phone_number: s.phone_number || '',
+      service_type: s.service_type || 'طيران',
+      address: s.address || '',
+    });
+  };
+
+  const handleEditSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSupplier) return;
+    if (!editSupplierForm.name) {
+      addToast('اسم المورد مطلوب', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await api.put(`/suppliers/${editingSupplier.id}`, {
+        name: editSupplierForm.name,
+        phone_number: editSupplierForm.phone_number || null,
+        service_type: editSupplierForm.service_type || null,
+        address: editSupplierForm.address || null,
+      });
+      addToast('تم تحديث بيانات المورد بنجاح', 'success');
+      setEditingSupplier(null);
+      fetchSuppliers();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'فشل تحديث بيانات المورد';
+      addToast(msg, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -105,6 +161,33 @@ export function SuppliersPage() {
         >
           <PlusCircle className="w-4 h-4" />
           إضافة مورد جديد
+        </button>
+      </div>
+
+      {/* Search Toolbar */}
+      <div className="flex items-center justify-between gap-3 p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
+        <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="بحث باسم المورد، نوع الخدمة، أو رقم الهاتف..."
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 pr-9 pl-4 py-2 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#1e3a8a]"
+          />
+          <button
+            type="submit"
+            className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+        </form>
+
+        <button
+          onClick={fetchSuppliers}
+          className="p-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
+          title="تحديث البيانات"
+        >
+          <RefreshCw className="w-4 h-4" />
         </button>
       </div>
 
@@ -175,6 +258,14 @@ export function SuppliersPage() {
                           <ArrowUpRight className="w-3.5 h-3.5" />
                           <span>سند صرف</span>
                         </button>
+                        <button
+                          onClick={() => openEditSupplier(s)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                          title="تعديل بيانات المورد"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>تعديل</span>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -231,6 +322,53 @@ export function SuppliersPage() {
             </Button>
             <Button type="submit" variant="primary" isLoading={isSubmitting}>
               حفظ المورد
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Edit Supplier Modal */}
+      <Modal
+        isOpen={!!editingSupplier}
+        onClose={() => setEditingSupplier(null)}
+        title="تعديل بيانات المورد"
+        description="تحديث بيانات شركة الطيران أو النقل أو الوكالة الشريكة"
+        size="md"
+      >
+        <form onSubmit={handleEditSupplier} className="space-y-4">
+          <Input
+            label="اسم المورد أو الشركة"
+            required
+            value={editSupplierForm.name}
+            onChange={(e) => setEditSupplierForm({ ...editSupplierForm, name: e.target.value })}
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="نوع الخدمة الرئيسية"
+              value={editSupplierForm.service_type}
+              onChange={(e) => setEditSupplierForm({ ...editSupplierForm, service_type: e.target.value })}
+            />
+
+            <Input
+              label="رقم الهاتف"
+              value={editSupplierForm.phone_number}
+              onChange={(e) => setEditSupplierForm({ ...editSupplierForm, phone_number: e.target.value })}
+            />
+          </div>
+
+          <Input
+            label="العنوان والمقر"
+            value={editSupplierForm.address}
+            onChange={(e) => setEditSupplierForm({ ...editSupplierForm, address: e.target.value })}
+          />
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            <Button type="button" variant="ghost" onClick={() => setEditingSupplier(null)}>
+              إلغاء
+            </Button>
+            <Button type="submit" variant="primary" isLoading={isSubmitting}>
+              حفظ التعديلات
             </Button>
           </div>
         </form>
