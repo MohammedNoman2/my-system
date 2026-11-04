@@ -136,37 +136,95 @@ async def create_booking(
             cust_name = data.parcel_details.sender_name
             cust_phone = data.parcel_details.sender_phone
 
-        # Strict Hierarchy per Mandatory Directive:
-        # 1. Search exact match by national_id OR passport_number (if provided)
+        import re
+
+        def _norm_arabic_tokens(text: str) -> list[str]:
+            s = (text or "").strip()
+            s = re.sub(r"[أإآ]", "ا", s)
+            s = s.replace("ة", "ه").replace("ى", "ي")
+            s = re.sub(r"عبد\s+", "عبد", s)
+            return [w for w in re.sub(r"\s+", " ", s).lower().split(" ") if w]
+
+        def _names_compatible(name_a: str, name_b: str, strict: bool = False) -> bool:
+            ta = _norm_arabic_tokens(name_a)
+            tb = _norm_arabic_tokens(name_b)
+            if not ta or not tb:
+                return False
+            if ta == tb:
+                return True
+            if ta[0] != tb[0]:
+                return False
+            short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+            if set(short) <= set(long_):
+                return True
+            if strict:
+                return False
+            return len(set(ta) & set(tb)) >= min(2, len(ta), len(tb))
+
+        cust_name = re.sub(r"\s+", " ", (cust_name or "").strip())
+        cust_phone = re.sub(r"\D", "", (cust_phone or "").strip())
+        if cust_phone.startswith("00967") and len(cust_phone) == 14:
+            cust_phone = cust_phone[5:]
+        elif cust_phone.startswith("967") and len(cust_phone) == 12:
+            cust_phone = cust_phone[3:]
+        cust_passport = cust_passport.strip().upper() if cust_passport and cust_passport.strip() else None
+        cust_id = cust_id.strip() if cust_id and cust_id.strip() else None
+
+        if not cust_name or len(cust_phone) < 9:
+            raise HTTPException(
+                status_code=400,
+                detail="اسم المسافر ورقم الهاتف الصحيح (9 أرقام على الأقل) مطلوبان لإتمام الحجز",
+            )
+
+        # 1. Search by national_id OR passport_number with Arabic name compatibility check (prevents P2 silent merge)
         if cust_id:
             c_res = await db.execute(select(Customer).where(Customer.id_number == cust_id))
-            customer = c_res.scalars().first()
+            doc_match = c_res.scalars().first()
+            if doc_match:
+                if not _names_compatible(doc_match.name, cust_name, strict=False):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"رقم الهوية ({cust_id}) مسجل مسبقاً لعميل آخر باسم مختلف ({doc_match.name}). يرجى التحقق من رقم الهوية أو اختيار العميل الصحيح.",
+                    )
+                customer = doc_match
+
         if not customer and cust_passport:
             c_res = await db.execute(select(Customer).where(Customer.passport_number == cust_passport))
-            customer = c_res.scalars().first()
+            doc_match = c_res.scalars().first()
+            if doc_match:
+                if not _names_compatible(doc_match.name, cust_name, strict=False):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"رقم الجواز ({cust_passport}) مسجل مسبقاً لعميل آخر باسم مختلف ({doc_match.name}). يرجى التحقق من رقم الجواز أو اختيار العميل الصحيح.",
+                    )
+                customer = doc_match
 
-        # 2. If not found, search exact match by (phone AND full_name)
-        if not customer and cust_phone and cust_name:
-            c_res = await db.execute(
-                select(Customer).where(Customer.phone_number == cust_phone, Customer.name == cust_name)
-            )
-            customer = c_res.scalars().first()
-
-        # 3. If no exact match is found, provision a new Customer and generate dedicated ledger accounts (Account) for each currency
+        # 2. If not found by document, search by phone_number and check strict subset name compatibility
         if not customer:
+            phone_res = await db.execute(select(Customer).where(Customer.phone_number == cust_phone))
+            same_phone_customers = phone_res.scalars().all()
+            for cand in same_phone_customers:
+                if _names_compatible(cand.name, cust_name, strict=True):
+                    customer = cand
+                    break
+
+        # 3. If matched, update missing passport/id if not conflicting; else create new customer record
+        if customer:
+            if cust_passport and not customer.passport_number:
+                customer.passport_number = cust_passport
+            if cust_id and not customer.id_number:
+                customer.id_number = cust_id
+            await create_entity_accounts(db, "customer", customer.id, customer.name)
+        else:
             customer = Customer(
-                name=cust_name or "عميل حجز",
-                phone_number=cust_phone or f"TEMP-{ref_num}",
+                name=cust_name,
+                phone_number=cust_phone,
                 passport_number=cust_passport,
                 id_number=cust_id,
                 balance=Decimal("0.00"),
             )
             db.add(customer)
             await db.flush()
-            # Generate dedicated sub-accounts for each currency
-            await create_entity_accounts(db, "customer", customer.id, customer.name)
-        else:
-            # Ensure entity sub-accounts exist
             await create_entity_accounts(db, "customer", customer.id, customer.name)
     else:
         # Ensure entity sub-accounts exist
@@ -216,7 +274,7 @@ async def create_booking(
         currency=data.currency,
         supplier_id=resolved_supplier_id,
         notes=data.notes,
-        status=BookingStatus.PENDING,
+        status=BookingStatus.CONFIRMED if data.paid_amount > 0 else BookingStatus.PENDING,
     )
     db.add(booking)
     await db.flush()
@@ -1127,12 +1185,18 @@ async def print_booking(
         office_settings = Settings()
 
     if format == "pdf":
-        pdf_data = generate_voucher_pdf(booking, office_settings, mode=mode)
-        return Response(
-            content=pdf_data,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"inline; filename=voucher-{booking.ticket_number}.pdf"},
+        from app.services.print_service import WEASYPRINT_AVAILABLE
+        if WEASYPRINT_AVAILABLE:
+            pdf_data = generate_voucher_pdf(booking, office_settings, mode=mode)
+            return Response(
+                content=pdf_data,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"inline; filename=voucher-{booking.ticket_number}.pdf"},
+            )
+        html_print = generate_voucher_html(booking, office_settings, mode=mode).replace(
+            "<body>", '<body onload="window.print()">'
         )
+        return Response(content=html_print, media_type="text/html; charset=utf-8")
 
     # Default HTML
     html_content = generate_voucher_html(booking, office_settings, mode=mode)

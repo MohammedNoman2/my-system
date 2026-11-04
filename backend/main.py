@@ -145,6 +145,36 @@ app.add_middleware(
 # CSRF Middleware
 app.add_middleware(CSRFMiddleware)
 
+import logging
+from datetime import datetime
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+api_logger = logging.getLogger("arp.http")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    api_logger.warning(f"[{ts}] HTTP {exc.status_code} on {request.method} {request.url.path} -> {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None) or None,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    api_logger.warning(f"[{ts}] HTTP 422 Validation Error on {request.method} {request.url.path} -> {exc.errors()}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 
 @app.get("/api/health", tags=["Health"])
 async def health_check():

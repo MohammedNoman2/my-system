@@ -70,6 +70,21 @@ async def list_customers(
     return res.scalars().all()
 
 
+def _normalize_phone(phone: str) -> str:
+    import re
+    digits = re.sub(r"\D", "", (phone or "").strip())
+    if digits.startswith("00967") and len(digits) == 14:
+        digits = digits[5:]
+    elif digits.startswith("967") and len(digits) == 12:
+        digits = digits[3:]
+    return digits
+
+
+def _normalize_name(name: str) -> str:
+    import re
+    return re.sub(r"\s+", " ", (name or "").strip())
+
+
 @router.post("/", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 async def create_customer(
     data: CustomerCreate,
@@ -77,14 +92,25 @@ async def create_customer(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Check phone unique
-    existing = await db.execute(
-        select(Customer).where(Customer.phone_number == data.phone_number)
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="رقم الهاتف مسجل مسبقاً لعميل آخر")
+    norm_phone = _normalize_phone(data.phone_number)
+    norm_name = _normalize_name(data.name)
+    if len(norm_phone) < 9 or len(norm_phone) > 15:
+        raise HTTPException(status_code=400, detail="رقم الهاتف غير صالح؛ يجب أن يتكون من 9 أرقام على الأقل")
 
-    customer = Customer(**data.model_dump())
+    existing = await db.execute(
+        select(Customer).where(Customer.phone_number == norm_phone, Customer.name == norm_name)
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="يوجد عميل مسجل مسبقاً بنفس الاسم ورقم الهاتف")
+
+    payload = data.model_dump()
+    payload["name"] = norm_name
+    payload["phone_number"] = norm_phone
+    for nullable_key in ("email", "passport_number", "id_number"):
+        if payload.get(nullable_key) is not None and not str(payload[nullable_key]).strip():
+            payload[nullable_key] = None
+
+    customer = Customer(**payload)
     db.add(customer)
     await db.flush()
 
@@ -129,12 +155,16 @@ async def update_customer(
         raise HTTPException(status_code=404, detail="العميل غير موجود")
 
     update_dict = data.model_dump(exclude_unset=True)
-    if "phone_number" in update_dict and update_dict["phone_number"] != customer.phone_number:
-        chk = await db.execute(
-            select(Customer).where(Customer.phone_number == update_dict["phone_number"])
-        )
-        if chk.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="رقم الهاتف مسجل مسبقاً لعميل آخر")
+    if "name" in update_dict and update_dict["name"]:
+        update_dict["name"] = _normalize_name(update_dict["name"])
+    if "phone_number" in update_dict and update_dict["phone_number"]:
+        norm_p = _normalize_phone(update_dict["phone_number"])
+        if len(norm_p) < 9 or len(norm_p) > 15:
+            raise HTTPException(status_code=400, detail="رقم الهاتف غير صالح؛ يجب أن يتكون من 9 أرقام على الأقل")
+        update_dict["phone_number"] = norm_p
+    for nullable_key in ("email", "passport_number", "id_number"):
+        if nullable_key in update_dict and update_dict[nullable_key] is not None and not str(update_dict[nullable_key]).strip():
+            update_dict[nullable_key] = None
 
     for k, v in update_dict.items():
         setattr(customer, k, v)

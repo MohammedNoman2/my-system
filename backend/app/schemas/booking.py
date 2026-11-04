@@ -7,6 +7,34 @@ from app.models.booking_details.flight import FlightTicketType
 from app.models.booking_details.passport import PassportPriority, PassportType
 
 
+import re
+
+DUMMY_DOC_NUMBERS = {
+    "123456", "1234567", "12345678", "123456789", "1234567890", "12345678901",
+    "01234567", "012345678", "0123456789", "87654321", "987654321",
+}
+
+
+def validate_clean_phone(val: str, field_label: str = "رقم الهاتف") -> str:
+    digits = re.sub(r"\D", "", (val or "").strip())
+    if digits.startswith("00967") and len(digits) == 14:
+        digits = digits[5:]
+    elif digits.startswith("967") and len(digits) == 12:
+        digits = digits[3:]
+    if len(digits) < 9 or len(digits) > 15:
+        raise ValueError(f"{field_label} غير صالح ({val})؛ يجب أن يتكون من 9 أرقام على الأقل")
+    return digits
+
+
+def validate_clean_doc_number(val: str, field_label: str = "رقم الوثيقة") -> str:
+    cleaned = re.sub(r"\s+", "", (val or "").strip()).upper()
+    if len(cleaned) < 6:
+        raise ValueError(f"{field_label} قصير جداً")
+    if cleaned in DUMMY_DOC_NUMBERS or len(set(cleaned)) == 1:
+        raise ValueError(f"{field_label} المدخل ({val}) يبدو رقماً تجريبياً غير حقيقي؛ يرجى إدخال الرقم الصحيح")
+    return cleaned
+
+
 # Detail Creation Schemas
 class FlightDetailCreate(BaseModel):
     airline_company: str
@@ -26,6 +54,13 @@ class FlightDetailCreate(BaseModel):
     birth_place: str
     passport_image_url: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _clean_fields(self) -> "FlightDetailCreate":
+        self.passenger_name = re.sub(r"\s+", " ", self.passenger_name.strip())
+        self.passenger_phone = validate_clean_phone(self.passenger_phone, "هاتف المسافر")
+        self.passport_number = validate_clean_doc_number(self.passport_number, "رقم الجواز")
+        return self
+
 
 class TransportDetailCreate(BaseModel):
     transport_company: str
@@ -41,6 +76,13 @@ class TransportDetailCreate(BaseModel):
     birth_place: str
     id_image_url: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _clean_fields(self) -> "TransportDetailCreate":
+        self.passenger_name = re.sub(r"\s+", " ", self.passenger_name.strip())
+        self.passenger_phone = validate_clean_phone(self.passenger_phone, "هاتف الراكب")
+        self.id_number = validate_clean_doc_number(self.id_number, "رقم الهوية")
+        return self
+
 
 class VisaDetailCreate(BaseModel):
     visa_type: str
@@ -52,6 +94,13 @@ class VisaDetailCreate(BaseModel):
     birth_date: date
     birth_place: str
     passport_image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _clean_fields(self) -> "VisaDetailCreate":
+        self.applicant_name = re.sub(r"\s+", " ", self.applicant_name.strip())
+        self.applicant_phone = validate_clean_phone(self.applicant_phone, "هاتف المتقدم")
+        self.passport_number = validate_clean_doc_number(self.passport_number, "رقم الجواز")
+        return self
 
 
 class PassportDetailCreate(BaseModel):
@@ -66,6 +115,13 @@ class PassportDetailCreate(BaseModel):
     birth_place: str
     id_image_url: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _clean_fields(self) -> "PassportDetailCreate":
+        self.applicant_name = re.sub(r"\s+", " ", self.applicant_name.strip())
+        self.applicant_phone = validate_clean_phone(self.applicant_phone, "هاتف المتقدم")
+        self.id_number = validate_clean_doc_number(self.id_number, "رقم الهوية")
+        return self
+
 
 class ParcelDetailCreate(BaseModel):
     sender_name: str
@@ -78,6 +134,15 @@ class ParcelDetailCreate(BaseModel):
     # NO quantity per specification
     content_description: Optional[str] = None
     shipping_date: date
+
+    @model_validator(mode="after")
+    def _clean_fields(self) -> "ParcelDetailCreate":
+        self.sender_name = re.sub(r"\s+", " ", self.sender_name.strip())
+        self.receiver_name = re.sub(r"\s+", " ", self.receiver_name.strip())
+        self.sender_phone = validate_clean_phone(self.sender_phone, "هاتف المرسل")
+        self.receiver_phone = validate_clean_phone(self.receiver_phone, "هاتف المستلم")
+        return self
+
 
 
 # Booking Creation

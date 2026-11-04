@@ -78,6 +78,17 @@ export function BookingList() {
     cancelled: { label: 'ملغي', className: 'bg-red-100 text-red-800' },
   };
 
+  const getPaymentBadge = (b: Booking) => {
+    if (b.status === 'cancelled') return { label: 'ملغي', className: 'bg-slate-100 text-slate-500' };
+    if (Number(b.remaining_amount) <= 0 && Number(b.paid_amount) > 0) {
+      return { label: 'مدفوع بالكامل', className: 'bg-emerald-50 text-emerald-700 border border-emerald-200' };
+    }
+    if (Number(b.paid_amount) > 0) {
+      return { label: 'مدفوع جزئياً', className: 'bg-sky-50 text-sky-700 border border-sky-200' };
+    }
+    return { label: 'غير مدفوع (آجل)', className: 'bg-amber-50 text-amber-700 border border-amber-200' };
+  };
+
   return (
     <div className="space-y-4">
       {/* Filters & Search Toolbar */}
@@ -190,13 +201,22 @@ export function BookingList() {
                       </td>
                     )}
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                          statusBadges[b.status]?.className || 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {statusBadges[b.status]?.label || b.status}
-                      </span>
+                      <div className="flex flex-col items-start gap-1">
+                        <span
+                          className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                            statusBadges[b.status]?.className || 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {statusBadges[b.status]?.label || b.status}
+                        </span>
+                        <span
+                          className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                            getPaymentBadge(b).className
+                          }`}
+                        >
+                          {getPaymentBadge(b).label}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1.5">

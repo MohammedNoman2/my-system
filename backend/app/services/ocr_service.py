@@ -9,6 +9,15 @@ from app.schemas.ocr import OcrIdResponse, OcrPassportResponse
 
 logger = logging.getLogger("arp.ocr")
 
+import os
+for _win_path in (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+):
+    if os.path.exists(_win_path):
+        pytesseract.pytesseract.tesseract_cmd = _win_path
+        break
+
 NATIONALITY_MAP = {
     "YEM": "يمني",
     "SAU": "سعودي",
@@ -148,8 +157,8 @@ def extract_passport_data(image_bytes: bytes) -> OcrPassportResponse:
             raw_text=combined_text.strip()[:300],
             mocked=False,
         )
-    except Exception as e:
-        logger.warning(f"pytesseract extraction failed ({e}); returning nulls.")
+    except pytesseract.TesseractNotFoundError as e:
+        logger.warning(f"Tesseract binary not installed ({e}); returning ocr_available=False.")
         return OcrPassportResponse(
             passenger_name=None,
             passport_number=None,
@@ -158,6 +167,21 @@ def extract_passport_data(image_bytes: bytes) -> OcrPassportResponse:
             nationality=None,
             raw_text="",
             mocked=False,
+            ocr_available=False,
+            error_message="محرك القراءة الضوئية (Tesseract-OCR) غير مثبت على الجهاز حالياً؛ يرجى إدخال البيانات يدوياً أو تثبيت Tesseract.",
+        )
+    except Exception as e:
+        logger.warning(f"OCR image processing failed ({e}); returning error_message.")
+        return OcrPassportResponse(
+            passenger_name=None,
+            passport_number=None,
+            birth_date=None,
+            birth_place=None,
+            nationality=None,
+            raw_text="",
+            mocked=False,
+            ocr_available=True,
+            error_message="تعذر قراءة الصورة المرفوعة؛ يرجى التأكد من سلامة ووضوح الصورة أو إدخال البيانات يدوياً.",
         )
 
 
@@ -196,8 +220,8 @@ def extract_id_data(image_bytes: bytes) -> OcrIdResponse:
             raw_text=combined_text.strip()[:300],
             mocked=False,
         )
-    except Exception as e:
-        logger.warning(f"pytesseract extraction failed ({e}); returning nulls.")
+    except pytesseract.TesseractNotFoundError as e:
+        logger.warning(f"Tesseract binary not installed ({e}); returning ocr_available=False.")
         return OcrIdResponse(
             passenger_name=None,
             id_number=None,
@@ -205,4 +229,18 @@ def extract_id_data(image_bytes: bytes) -> OcrIdResponse:
             birth_place=None,
             raw_text="",
             mocked=False,
+            ocr_available=False,
+            error_message="محرك القراءة الضوئية (Tesseract-OCR) غير مثبت على الجهاز حالياً؛ يرجى إدخال البيانات يدوياً أو تثبيت Tesseract.",
+        )
+    except Exception as e:
+        logger.warning(f"OCR image processing failed ({e}); returning error_message.")
+        return OcrIdResponse(
+            passenger_name=None,
+            id_number=None,
+            birth_date=None,
+            birth_place=None,
+            raw_text="",
+            mocked=False,
+            ocr_available=True,
+            error_message="تعذر قراءة الصورة المرفوعة؛ يرجى التأكد من سلامة ووضوح الصورة أو إدخال البيانات يدوياً.",
         )

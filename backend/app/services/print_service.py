@@ -1,8 +1,8 @@
-import logging
+﻿import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from app.models.booking import Booking, BookingType
+from app.models.booking import Booking, BookingStatus, BookingType
 from app.models.settings import Settings
 
 logger = logging.getLogger("arp.print")
@@ -96,19 +96,27 @@ def build_field_table_html(rows: List[List[Dict[str, Any]]]) -> str:
 
 def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
     curr = booking.currency or "YER"
-    total_price = f"{booking.selling_price} {curr}"
-    paid = f"{booking.paid_amount} {curr}"
-    remaining = f"{booking.remaining_amount} {curr}"
+    total_price = f"{booking.selling_price:,.2f} {curr}"
+    paid = f"{booking.paid_amount:,.2f} {curr}"
+    remaining = f"{booking.remaining_amount:,.2f} {curr}"
     date_str = booking.booking_date.strftime("%Y-%m-%d %H:%M") if booking.booking_date else "--"
     emp_name = booking.employee.full_name if booking.employee else "مدير النظام"
     notes = booking.notes or "لا توجد ملاحظات إضافية"
 
-    status_ar = {
-        "pending": "قيد الانتظار",
-        "confirmed": "مؤكد",
-        "cancelled": "ملغي",
-        "completed": "مكتمل",
-    }.get(booking.status.value if hasattr(booking.status, "value") else str(booking.status), "مؤكد")
+    if booking.status == BookingStatus.CANCELLED or str(booking.status) == "cancelled":
+        status_ar = "ملغي"
+    elif booking.remaining_amount == 0 and booking.paid_amount > 0:
+        status_ar = "مؤكد (مسدد بالكامل)"
+    elif booking.paid_amount > 0:
+        status_ar = "مؤكد (مدفوع جزئياً)"
+    else:
+        status_ar = "معلق (آجل)"
+
+    financial_row = [
+        {"label": "المتبقي", "value": remaining, "bold": True},
+        {"label": "المبلغ المدفوع", "value": paid, "bold": True},
+        {"label": "السعر الإجمالي", "value": total_price, "bold": True},
+    ]
 
     rows: List[List[Dict[str, Any]]] = []
 
@@ -127,7 +135,7 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
             ],
             [
                 {"label": "وقت الحضور", "value": "قبل 3 ساعات", "bold": True},
-                {"label": "درجة السفر", "value": "اقتصادية", "bold": True},
+                {"label": "شركة الطيران", "value": fd.airline_company if fd else "--", "bold": True},
                 {"label": "الرحلة", "value": f"{fd.flight_number} ({'ذهاب وعودة' if fd and fd.ticket_type == 'roundtrip' else 'ذهاب فقط'})" if fd else "--", "bold": True},
             ],
             [
@@ -135,11 +143,7 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
                 {"label": "تفاصيل إضافية", "value": notes, "bold": False},
                 {"label": "تاريخ الإصدار", "value": date_str, "bold": False},
             ],
-            [
-                {"label": "المتبقي", "value": remaining, "bold": True},
-                {"label": "العملة", "value": curr, "bold": True},
-                {"label": "السعر الإجمالي", "value": total_price, "bold": True},
-            ],
+            financial_row,
         ]
 
     elif booking.type == BookingType.TRANSPORT:
@@ -156,8 +160,8 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
                 {"label": "من الانطلاق", "value": td.departure_station if td else "--", "bold": True},
             ],
             [
-                {"label": "نوع التذكرة", "value": "--", "bold": True},
-                {"label": "نوع الحافلة", "value": "--", "bold": True},
+                {"label": "الموظف المصدر", "value": emp_name, "bold": True},
+                {"label": "رقم الهوية", "value": td.id_number if td else "--", "bold": True},
                 {"label": "شركة النقل", "value": td.transport_company if td else "--", "bold": True},
             ],
             [
@@ -165,19 +169,15 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
                 {"label": "الحالة", "value": status_ar, "bold": True},
                 {"label": "تاريخ الإصدار", "value": date_str, "bold": False},
             ],
-            [
-                {"label": "المتبقي", "value": remaining, "bold": True},
-                {"label": "العملة", "value": curr, "bold": True},
-                {"label": "إجمالي السعر", "value": total_price, "bold": True},
-            ],
+            financial_row,
         ]
 
     elif booking.type == BookingType.VISA:
         vd = booking.visa_details
-        updated_str = booking.updated_at.strftime("%Y-%m-%d %H:%M") if hasattr(booking, "updated_at") and booking.updated_at else "--"
+        app_date_str = str(vd.application_date) if vd and vd.application_date else date_str
         rows = [
             [
-                {"label": "التاريخ", "value": date_str, "bold": False},
+                {"label": "تاريخ التقديم", "value": app_date_str, "bold": True},
                 {"label": "رقم الهاتف", "value": vd.applicant_phone if vd else "--", "bold": True},
                 {"label": "اسم المتقدم", "value": vd.applicant_name if vd else "--", "bold": True},
             ],
@@ -192,23 +192,19 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
                 {"label": "الموظف المسؤول", "value": emp_name, "bold": True},
             ],
             [
-                {"label": "المتبقي", "value": remaining, "bold": True},
-                {"label": "تاريخ التحديث", "value": updated_str, "bold": False},
+                {"label": "تاريخ الإصدار", "value": date_str, "bold": False},
+                {"label": "تاريخ الميلاد", "value": str(vd.birth_date) if vd and vd.birth_date else "--", "bold": True},
                 {"label": "ملاحظات المعاملة", "value": notes, "bold": False},
             ],
-            [
-                {"label": "المدفوع", "value": paid, "bold": True},
-                {"label": "العملة", "value": curr, "bold": True},
-                {"label": "إجمالي المبلغ", "value": total_price, "bold": True},
-            ],
+            financial_row,
         ]
 
     elif booking.type == BookingType.PASSPORT:
         pd = booking.passport_details
         pt_ar = {"new": "جديد", "renewal": "تجديد", "lost": "بدل فاقد", "damaged": "بدل تالف"}.get(
-            pd.passport_type.value if pd and hasattr(pd.passport_type, "value") else "جديد", "جديد"
+            pd.passport_type.value if pd and hasattr(pd.passport_type, "value") else "new", "جديد"
         )
-        prio_ar = "مستعجل" if pd and pd.priority == "urgent" else "عادي"
+        prio_ar = "مستعجل" if pd and (getattr(pd.priority, "value", pd.priority) == "urgent") else "عادي"
         rows = [
             [
                 {"label": "تاريخ الاستلام", "value": date_str, "bold": False},
@@ -217,8 +213,8 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
             ],
             [
                 {"label": "الأولوية", "value": prio_ar, "bold": True},
+                {"label": "رقم الهوية الوطنية", "value": pd.id_number if pd else "--", "bold": True},
                 {"label": "نوع الجواز", "value": pt_ar, "bold": True},
-                {"label": "نوع الخدمة", "value": pt_ar, "bold": True},
             ],
             [
                 {"label": "حالة الطلب", "value": status_ar, "bold": True},
@@ -226,49 +222,41 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
                 {"label": "الموظف المسؤول", "value": emp_name, "bold": True},
             ],
             [
-                {"label": "المتبقي", "value": remaining, "bold": True},
-                {"label": "تاريخ التسليم المتوقع", "value": str(pd.expected_delivery_date) if pd and pd.expected_delivery_date else "--", "bold": True},
+                {"label": "تاريخ الميلاد", "value": str(pd.birth_date) if pd and pd.birth_date else "--", "bold": True},
+                {"label": "تاريخ التسليم المتوقع", "value": str(pd.expected_delivery_date) if pd and pd.expected_delivery_date else "حسب الجوازات", "bold": True},
                 {"label": "ملاحظات المعاملة", "value": notes, "bold": False},
             ],
-            [
-                {"label": "الإجمالي", "value": total_price, "bold": True},
-                {"label": "العملة", "value": curr, "bold": True},
-                {"label": "المبلغ المدفوع", "value": paid, "bold": True},
-            ],
+            financial_row,
         ]
 
     elif booking.type == BookingType.PARCEL:
         pld = booking.parcel_details
+        ship_date = str(pld.shipping_date) if pld and pld.shipping_date else date_str
         rows = [
             [
-                {"label": "التاريخ", "value": date_str, "bold": False},
+                {"label": "تاريخ الشحن", "value": ship_date, "bold": True},
                 {"label": "هاتف المرسل", "value": pld.sender_phone if pld else "--", "bold": True},
                 {"label": "المرسل", "value": pld.sender_name if pld else "--", "bold": True},
             ],
             [
-                {"label": "المستلم", "value": pld.receiver_name if pld else "--", "bold": True},
+                {"label": "إلى الوجهة", "value": pld.delivery_destination if pld else "--", "bold": True},
                 {"label": "هاتف المستلم", "value": pld.receiver_phone if pld else "--", "bold": True},
-                {"label": "من الاستلام", "value": "--", "bold": True},
+                {"label": "المستلم", "value": pld.receiver_name if pld else "--", "bold": True},
             ],
             [
-                {"label": "إلى الوجهة", "value": pld.delivery_destination if pld else "--", "bold": True},
-                {"label": "وصف الطرد", "value": f"{pld.parcel_type} - {pld.content_description or ''}" if pld else "--", "bold": True},
+                {"label": "نوع الطرد", "value": pld.parcel_type if pld else "--", "bold": True},
+                {"label": "وصف الطرد", "value": pld.content_description or pld.parcel_type if pld else "--", "bold": True},
                 {"label": "الوزن التقديري", "value": f"{pld.weight} كجم" if pld else "--", "bold": True},
             ],
             [
+                {"label": "الحالة", "value": status_ar, "bold": True},
                 {"label": "الموظف", "value": emp_name, "bold": True},
-                {"label": "المرجع", "value": booking.ticket_number, "bold": True},
                 {"label": "ملاحظات الشحن", "value": notes, "bold": False},
             ],
-            [
-                {"label": "الإجمالي", "value": total_price, "bold": True},
-                {"label": "العملة", "value": curr, "bold": True},
-                {"label": "الحالة", "value": status_ar, "bold": True},
-            ],
+            financial_row,
         ]
 
     return rows
-
 
 def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str = "thermal") -> str:
     title = TITLES.get(booking.type, "سند حجز")

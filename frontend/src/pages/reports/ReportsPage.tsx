@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   BarChart3,
   FileSpreadsheet,
@@ -171,11 +171,14 @@ export function ReportsPage() {
   };
 
   useEffect(() => {
-    if (activeReport !== 'ledger') {
-        generateReport();
-    } else {
-        setLedgerData(null);
+    if (activeReport === 'ledger') {
+      setLedgerData(null);
+      return;
     }
+    const timer = setTimeout(() => {
+      generateReport();
+    }, 250);
+    return () => clearTimeout(timer);
   }, [activeReport, serviceType]);
 
   const handleExport = async (format: 'excel' | 'pdf') => {

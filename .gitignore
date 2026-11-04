@@ -8,3 +8,5 @@ arp.db
 .vscode/
 backend/db_out*.txt
 db_out*.txt
+*.bak
+

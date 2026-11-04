@@ -39,6 +39,18 @@ export function OcrScanButton({ type, onExtracted }: OcrScanButtonProps) {
       });
 
       const data = res.data;
+      if (data.ocr_available === false || data.error_message) {
+        addToast(data.error_message || 'محرك القراءة الضوئية (Tesseract-OCR) غير مثبت على هذا الجهاز', 'warning');
+        return;
+      }
+
+      const hasAnyField =
+        data.passenger_name || data.passport_number || data.id_number || data.birth_date || data.birth_place;
+      if (!hasAnyField) {
+        addToast('لم يتمكن المسح الضوئي من قراءة بيانات واضحة من الصورة؛ يرجى تعبئة الحقول يدوياً', 'warning');
+        return;
+      }
+
       onExtracted({
         passenger_name: data.passenger_name || undefined,
         passport_number: data.passport_number || undefined,
@@ -47,7 +59,7 @@ export function OcrScanButton({ type, onExtracted }: OcrScanButtonProps) {
         birth_place: data.birth_place || undefined,
       });
 
-      addToast('تم استخراج وقراءة بيانات الوثيقة بالذكاء الاصطناعي بنجاح', 'success');
+      addToast('تم استخراج وقراءة بيانات الوثيقة بنجاح', 'success');
     } catch (err: any) {
       const msg = err.response?.data?.detail || 'فشلت معالجة الصورة ضوئياً';
       addToast(msg, 'error');

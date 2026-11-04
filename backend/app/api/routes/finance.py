@@ -1,4 +1,4 @@
-"""
+﻿"""
 Finance Routes — الترقية المعمارية الكاملة للمنظومة المالية
 يشمل: الورديات، تخصيص السداد المتعدد العملات، القيود العكسية، حماية التزامن
 """
@@ -252,6 +252,8 @@ async def create_receipt_voucher(
                     detail=f"المبلغ ({data.amount}) أكبر من المتبقي على الحجز ({booking.remaining_amount})")
             booking.paid_amount += data.amount
             booking.remaining_amount -= data.amount
+            if booking.status == BookingStatus.PENDING and booking.paid_amount > 0:
+                booking.status = BookingStatus.CONFIRMED
 
     tx = FinancialTransaction(
         transaction_id=ref_num, type=TransactionType.PAYMENT_IN,
@@ -384,6 +386,8 @@ async def create_receipt_voucher_v2(
             Decimal("0.0000"),
             (Decimal(str(booking.remaining_amount)) - allocated_in_booking_curr).quantize(Decimal("0.0001"))
         )
+        if booking.status == BookingStatus.PENDING and booking.paid_amount > 0:
+            booking.status = BookingStatus.CONFIRMED
 
         # تسجيل التخصيص
         alloc = VoucherAllocation(
@@ -659,6 +663,8 @@ async def void_voucher(
                 amt = Decimal(str(alloc.allocated_in_booking_currency))
                 booking.paid_amount = max(Decimal("0.0000"), Decimal(str(booking.paid_amount)) - amt)
                 booking.remaining_amount = Decimal(str(booking.remaining_amount)) + amt
+                if booking.paid_amount == Decimal("0.0000") and booking.status == BookingStatus.CONFIRMED:
+                    booking.status = BookingStatus.PENDING
 
     # If simple (no allocations) booking link
     if not voucher.allocations and voucher.booking_id:
@@ -667,6 +673,8 @@ async def void_voucher(
             amt = Decimal(str(voucher.amount))
             booking.paid_amount = max(Decimal("0.0000"), Decimal(str(booking.paid_amount)) - amt)
             booking.remaining_amount = Decimal(str(booking.remaining_amount)) + amt
+            if booking.paid_amount == Decimal("0.0000") and booking.status == BookingStatus.CONFIRMED:
+                booking.status = BookingStatus.PENDING
 
     # ─── Find Original JE ───────────────────────────────────────────────
     orig_je_stmt = (select(JournalEntry)
@@ -927,78 +935,8 @@ async def get_customer_ledger(
     current_user: User = Depends(require_accountant_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    cust = await db.get(Customer, customer_id)
-    if not cust:
-        raise HTTPException(status_code=404, detail="العميل غير موجود")
-    bookings_res = await db.execute(
-        select(Booking).where(
-            Booking.customer_id == customer_id,
-            Booking.status != BookingStatus.CANCELLED,
-        ).order_by(Booking.booking_date)
-    )
-    bookings = bookings_res.scalars().all()
-    txs_res = await db.execute(
-        select(FinancialTransaction).options(selectinload(FinancialTransaction.allocations)).where(
-            FinancialTransaction.entity_type == EntityType.CUSTOMER,
-            FinancialTransaction.entity_id == customer_id,
-            FinancialTransaction.is_void == False,
-        ).order_by(FinancialTransaction.transaction_date)
-    )
-    txs = txs_res.scalars().all()
-    events = []
-    for b in bookings:
-        b_date = b.booking_date.date() if b.booking_date else date.today()
-        events.append({"id": b.id, "date": b_date, "currency": b.currency or "YER",
-            "description": f"حجز {b.type.value} - {b.ticket_number}",
-            "reference_id": b.ticket_number, "debit": b.selling_price, "credit": Decimal("0.00"), "notes": b.notes})
-    for t in txs:
-        curr = getattr(t, "currency", "YER") or "YER"
-        if t.type == TransactionType.PAYMENT_IN:
-            events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                "description": f"سند قبض - {t.transaction_id}",
-                "reference_id": t.transaction_id, "debit": Decimal("0.00"), "credit": t.amount, "notes": t.notes})
-            # Check for cross-currency allocations to create clearing entries
-            for alloc in getattr(t, "allocations", []):
-                target_curr = alloc.target_currency.value if hasattr(alloc.target_currency, "value") else alloc.target_currency
-                if target_curr != curr:
-                    # Clearing entry in voucher's currency (Debit to offset the Credit)
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                        "description": f"قيد تسوية - تخصيص لحجز {alloc.booking_id} (صرف {alloc.exchange_rate})",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": alloc.allocated_amount, "credit": Decimal("0.00"), "notes": None})
-                    # Clearing entry in target's currency (Credit to pay off the Debt)
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": target_curr,
-                        "description": f"قيد تسوية - سداد عبر {t.transaction_id}",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": Decimal("0.00"), "credit": alloc.allocated_in_booking_currency, "notes": None})
-        elif t.type == TransactionType.PAYMENT_OUT:
-            events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                "description": f"سند صرف - {t.transaction_id}",
-                "reference_id": t.transaction_id, "debit": t.amount, "credit": Decimal("0.00"), "notes": t.notes})
-            for alloc in getattr(t, "allocations", []):
-                target_curr = alloc.target_currency.value if hasattr(alloc.target_currency, "value") else alloc.target_currency
-                if target_curr != curr:
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                        "description": f"قيد تسوية - تخصيص لحجز {alloc.booking_id} (صرف {alloc.exchange_rate})",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": Decimal("0.00"), "credit": alloc.allocated_amount, "notes": None})
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": target_curr,
-                        "description": f"قيد تسوية - سداد عبر {t.transaction_id}",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": alloc.allocated_in_booking_currency, "credit": Decimal("0.00"), "notes": None})
-    events.sort(key=lambda x: x["date"])
-    
-    ledgers_by_currency = {}
-    for ev in events:
-        curr = ev["currency"]
-        if curr not in ledgers_by_currency:
-            ledgers_by_currency[curr] = {"entries": [], "balance": Decimal("0.00")}
-        
-        ledgers_by_currency[curr]["balance"] += ev["debit"] - ev["credit"]
-        ledgers_by_currency[curr]["entries"].append(LedgerEntryResponse(
-            id=ev["id"], date=ev["date"], description=ev["description"],
-            reference_id=ev["reference_id"], debit=ev["debit"], credit=ev["credit"],
-            balance=ledgers_by_currency[curr]["balance"], notes=ev["notes"]
-        ))
-
-    return {"customer": {"id": cust.id, "name": cust.name, "phone": cust.phone_number, "current_balance": cust.balance},
-            "ledgers": ledgers_by_currency}
+    from app.services.ledger_service import get_ledger_statement
+    return await get_ledger_statement(db, "customer", customer_id)
 
 
 @router.get("/ledger/supplier/{supplier_id}")
@@ -1007,75 +945,8 @@ async def get_supplier_ledger(
     current_user: User = Depends(require_accountant_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    supp = await db.get(Supplier, supplier_id)
-    if not supp:
-        raise HTTPException(status_code=404, detail="المورد غير موجود")
-    bookings_res = await db.execute(
-        select(Booking).where(
-            Booking.supplier_id == supplier_id,
-            Booking.status != BookingStatus.CANCELLED,
-        ).order_by(Booking.booking_date)
-    )
-    bookings = bookings_res.scalars().all()
-    txs_res = await db.execute(
-        select(FinancialTransaction).options(selectinload(FinancialTransaction.allocations)).where(
-            FinancialTransaction.entity_type == EntityType.SUPPLIER,
-            FinancialTransaction.entity_id == supplier_id,
-            FinancialTransaction.is_void == False,
-        ).order_by(FinancialTransaction.transaction_date)
-    )
-    txs = txs_res.scalars().all()
-    events = []
-    for b in bookings:
-        b_date = b.booking_date.date() if b.booking_date else date.today()
-        events.append({"id": b.id, "date": b_date, "currency": b.currency or "YER",
-            "description": f"حجز {b.type.value} - {b.ticket_number}",
-            "reference_id": b.ticket_number, "debit": Decimal("0.00"), "credit": b.cost_price, "notes": b.notes})
-    for t in txs:
-        curr = getattr(t, "currency", "YER") or "YER"
-        if t.type == TransactionType.PAYMENT_OUT:
-            events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                "description": f"سند صرف - {t.transaction_id}",
-                "reference_id": t.transaction_id, "debit": t.amount, "credit": Decimal("0.00"), "notes": t.notes})
-            for alloc in getattr(t, "allocations", []):
-                target_curr = alloc.target_currency.value if hasattr(alloc.target_currency, "value") else alloc.target_currency
-                if target_curr != curr:
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                        "description": f"قيد تسوية - تخصيص لحجز {alloc.booking_id} (صرف {alloc.exchange_rate})",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": Decimal("0.00"), "credit": alloc.allocated_amount, "notes": None})
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": target_curr,
-                        "description": f"قيد تسوية - سداد عبر {t.transaction_id}",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": alloc.allocated_in_booking_currency, "credit": Decimal("0.00"), "notes": None})
-        elif t.type == TransactionType.PAYMENT_IN:
-            events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                "description": f"سند قبض - {t.transaction_id}",
-                "reference_id": t.transaction_id, "debit": Decimal("0.00"), "credit": t.amount, "notes": t.notes})
-            for alloc in getattr(t, "allocations", []):
-                target_curr = alloc.target_currency.value if hasattr(alloc.target_currency, "value") else alloc.target_currency
-                if target_curr != curr:
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": curr,
-                        "description": f"قيد تسوية - تخصيص لحجز {alloc.booking_id} (صرف {alloc.exchange_rate})",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": alloc.allocated_amount, "credit": Decimal("0.00"), "notes": None})
-                    events.append({"id": t.id, "date": t.transaction_date, "currency": target_curr,
-                        "description": f"قيد تسوية - سداد عبر {t.transaction_id}",
-                        "reference_id": f"CLR-{t.transaction_id}", "debit": Decimal("0.00"), "credit": alloc.allocated_in_booking_currency, "notes": None})
-    events.sort(key=lambda x: x["date"])
-    
-    ledgers_by_currency = {}
-    for ev in events:
-        curr = ev["currency"]
-        if curr not in ledgers_by_currency:
-            ledgers_by_currency[curr] = {"entries": [], "balance": Decimal("0.00")}
-        
-        ledgers_by_currency[curr]["balance"] += ev["credit"] - ev["debit"]
-        ledgers_by_currency[curr]["entries"].append(LedgerEntryResponse(
-            id=ev["id"], date=ev["date"], description=ev["description"],
-            reference_id=ev["reference_id"], debit=ev["debit"], credit=ev["credit"],
-            balance=ledgers_by_currency[curr]["balance"], notes=ev["notes"]
-        ))
-
-    return {"supplier": {"id": supp.id, "name": supp.name, "phone": supp.phone_number, "current_balance": supp.balance},
-            "ledgers": ledgers_by_currency}
+    from app.services.ledger_service import get_ledger_statement
+    return await get_ledger_statement(db, "supplier", supplier_id)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 11. MULTI-CURRENCY LEDGER V3 (NEW)

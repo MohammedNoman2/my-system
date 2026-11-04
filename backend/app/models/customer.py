@@ -11,7 +11,7 @@ class Customer(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
-    phone_number: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(20), unique=False, index=True, nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(100), unique=True, index=True, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     passport_number: Mapped[Optional[str]] = mapped_column(String(50), unique=True, index=True, nullable=True)

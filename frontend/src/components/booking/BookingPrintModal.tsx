@@ -88,16 +88,16 @@ export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintMo
           </div>
 
           <div className="flex items-center gap-2">
-            <a
-              href={pdfDownloadUrl}
-              download={`voucher-${bookingId}.pdf`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            <button
+              type="button"
+              onClick={handlePrint}
+              disabled={isLoading || !!error || !htmlContent}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+              title="اختر Save as PDF من نافذة الطباعة لحفظ ملف PDF أصلي"
             >
               <Download className="w-3.5 h-3.5 text-slate-500" />
-              تنزيل PDF
-            </a>
+              حفظ كـ PDF
+            </button>
             <Button
               type="button"
               variant="primary"

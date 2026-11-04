@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ShiftWidget — مؤشر حالة الوردية النقدية في الترويسة
  * يعرض شارة مع زر لفتح/إغلاق وردية الصندوق
  */
@@ -47,7 +47,7 @@ export function ShiftWidget() {
 
   useEffect(() => {
     fetchShiftStatus();
-    const interval = setInterval(fetchShiftStatus, 60_000);
+    const interval = setInterval(fetchShiftStatus, 180_000);
     return () => clearInterval(interval);
   }, [fetchShiftStatus]);
 

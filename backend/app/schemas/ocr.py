@@ -11,6 +11,8 @@ class OcrPassportResponse(BaseModel):
     nationality: Optional[str] = None
     raw_text: Optional[str] = None
     mocked: bool = False
+    ocr_available: bool = True
+    error_message: Optional[str] = None
 
 
 class OcrIdResponse(BaseModel):
@@ -20,3 +22,5 @@ class OcrIdResponse(BaseModel):
     birth_place: Optional[str] = None
     raw_text: Optional[str] = None
     mocked: bool = False
+    ocr_available: bool = True
+    error_message: Optional[str] = None
