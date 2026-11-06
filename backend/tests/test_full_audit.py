@@ -1,4 +1,4 @@
-﻿import sys, os, json, requests
+import sys, os, json, requests
 from decimal import Decimal
 from datetime import date, datetime
 

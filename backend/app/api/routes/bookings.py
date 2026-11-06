@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user, require_booking_role
 from app.core.database import get_db
+from app.core.config import office_today
 from app.models.booking import Booking, BookingStatus, BookingType
 from app.models.booking_details import (
     FlightBookingDetail,
@@ -426,7 +427,7 @@ async def create_booking(
             currency=data.currency,
             payment_method=PaymentMethod.CASH,
             notes=f"دفعة حجز {ref_num}",
-            transaction_date=date.today(),
+            transaction_date=office_today(),
             booking_id=booking.id,
             created_by=current_user.id,
             shift_id=active_shift.id if active_shift else None,
@@ -944,7 +945,7 @@ async def cancel_booking(
             currency=booking.currency,
             payment_method=PaymentMethod.CASH,
             notes=f"مبلغ مسترد لإلغاء الحجز {booking.ticket_number}: {data.reason}",
-            transaction_date=date.today(),
+            transaction_date=office_today(),
             booking_id=booking.id,
             created_by=current_user.id,
             shift_id=active_shift.id if active_shift else None,

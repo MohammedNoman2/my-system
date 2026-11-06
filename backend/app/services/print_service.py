@@ -1,9 +1,10 @@
-﻿import logging
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from app.models.booking import Booking, BookingStatus, BookingType
 from app.models.settings import Settings
+from app.core.config import format_office_dt
 
 logger = logging.getLogger("arp.print")
 
@@ -99,7 +100,7 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
     total_price = f"{booking.selling_price:,.2f} {curr}"
     paid = f"{booking.paid_amount:,.2f} {curr}"
     remaining = f"{booking.remaining_amount:,.2f} {curr}"
-    date_str = booking.booking_date.strftime("%Y-%m-%d %H:%M") if booking.booking_date else "--"
+    date_str = format_office_dt(booking.booking_date)
     emp_name = booking.employee.full_name if booking.employee else "مدير النظام"
     notes = booking.notes or "لا توجد ملاحظات إضافية"
 

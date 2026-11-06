@@ -6,31 +6,63 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
+from app.core.config import format_office_dt, office_date_range_utc
 from app.core.database import get_db
+from app.models.accounting import Account, EntityAccountType, JournalEntryLine
 from app.models.booking import Booking, BookingStatus, BookingType
 from app.models.customer import Customer
-from app.models.financial import FinancialTransaction, TransactionType
+from app.models.financial import FinancialTransaction, PaymentMethod, TransactionType
 from app.models.supplier import Supplier
 from app.models.user import User, UserRole
 from app.schemas.report import ReportFilter, ReportSummary
-from app.services.accounting_service import sync_all_entity_balances
+from app.services.accounting_service import get_exchange_rate_to_yer
 from app.services.export_service import export_report_to_excel, export_report_to_pdf
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
+SERVICE_LABELS = {
+    "flight": "طيران (flight)",
+    "transport": "نقل بري (transport)",
+    "visa": "تأشيرة (visa)",
+    "passport": "جوازات (passport)",
+    "parcel": "طرود (parcel)",
+}
+
+PAYMENT_METHOD_LABELS = {
+    "cash": "نقداً",
+    "bank_transfer": "تحويل بنكي",
+    "check": "شيك مصرفي",
+}
+
+STATUS_LABELS = {
+    "pending": "معلق (آجل)",
+    "confirmed": "مؤكد",
+    "completed": "مكتمل",
+    "cancelled": "ملغي",
+}
+
+
+async def _get_rates_map(db: AsyncSession) -> Dict[str, Decimal]:
+    return {
+        "YER": Decimal("1.0000"),
+        "SAR": await get_exchange_rate_to_yer(db, "SAR"),
+        "USD": await get_exchange_rate_to_yer(db, "USD"),
+    }
+
 
 async def build_report(filters: ReportFilter, current_user: User, db: AsyncSession) -> ReportSummary:
-    # Strict role check:
-    # If employee, ONLY bookings_detailed is allowed, and employee_id is FORCED to current_user.id
+    # Strict role check: Employee is only allowed bookings_detailed for their own bookings
     if current_user.role == UserRole.EMPLOYEE:
         if filters.report_type != "bookings_detailed":
             raise HTTPException(
                 status_code=403,
                 detail="الموظف مصرح له فقط بالوصول إلى تقرير الحجوزات التفصيلي الخاص به",
             )
-        filters.employee_id = current_user.id  # Enforced on server!
+        filters.employee_id = current_user.id
 
     period_str = f"{filters.start_date or 'البداية'} إلى {filters.end_date or 'اليوم'}"
+    start_utc, end_utc = office_date_range_utc(filters.start_date, filters.end_date)
+    rates_map = await _get_rates_map(db)
 
     # 1. Detailed Bookings Report
     if filters.report_type == "bookings_detailed":
@@ -47,10 +79,10 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
             stmt = stmt.where(Booking.employee_id == filters.employee_id)
         if filters.service_type:
             stmt = stmt.where(Booking.type == filters.service_type)
-        if filters.start_date:
-            stmt = stmt.where(func.date(Booking.booking_date) >= filters.start_date)
-        if filters.end_date:
-            stmt = stmt.where(func.date(Booking.booking_date) <= filters.end_date)
+        if start_utc:
+            stmt = stmt.where(Booking.booking_date >= start_utc)
+        if end_utc:
+            stmt = stmt.where(Booking.booking_date <= end_utc)
         if filters.customer_id:
             stmt = stmt.where(Booking.customer_id == filters.customer_id)
 
@@ -58,79 +90,119 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
         bookings = res.scalars().all()
 
         rows = []
+        totals_by_curr: Dict[str, Decimal] = {}
+        total_yer_equiv = Decimal("0.00")
+
         for b in bookings:
-            row = {
+            curr = (b.currency or "YER").upper()
+            st_val = b.status.value if hasattr(b.status, "value") else str(b.status)
+            t_val = b.type.value if hasattr(b.type, "value") else str(b.type)
+            row: Dict[str, Any] = {
                 "رقم التذكرة": b.ticket_number,
-                "النوع": b.type.value,
+                "النوع": SERVICE_LABELS.get(t_val, t_val),
                 "العميل": b.customer.name if b.customer else "--",
                 "الموظف": b.employee.full_name if b.employee else "--",
-                "تاريخ الحجز": b.booking_date.strftime("%Y-%m-%d %H:%M") if b.booking_date else "--",
+                "تاريخ الحجز": format_office_dt(b.booking_date),
+                "العملة": curr,
                 "سعر البيع": float(b.selling_price),
                 "المدفوع": float(b.paid_amount),
                 "المتبقي": float(b.remaining_amount),
-                "الحالة": b.status.value,
+                "الحالة": STATUS_LABELS.get(st_val, st_val),
             }
-            # Only include cost_price if NOT employee
             if current_user.role != UserRole.EMPLOYEE:
                 row["سعر التكلفة"] = float(b.cost_price)
             rows.append(row)
 
-        total_amount = sum(b.selling_price for b in bookings)
+            if b.status != BookingStatus.CANCELLED:
+                totals_by_curr[curr] = totals_by_curr.get(curr, Decimal("0.00")) + Decimal(str(b.selling_price))
+                rate = rates_map.get(curr, Decimal("1.0000"))
+                total_yer_equiv += (Decimal(str(b.selling_price)) * rate).quantize(Decimal("0.01"))
+
         return ReportSummary(
             title="تقرير الحجوزات التفصيلي",
             report_type="bookings_detailed",
             period=period_str,
             total_count=len(bookings),
-            total_amount=total_amount,
+            total_amount=total_yer_equiv,
+            totals_by_currency={k: float(v.quantize(Decimal("0.01"))) for k, v in totals_by_curr.items()},
             rows=rows,
         )
 
-    # 2. Revenue Report
+    # 2. Revenue Report (Separated by Service Type AND Currency)
     elif filters.report_type == "revenue":
         stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED)
-        if filters.start_date:
-            stmt = stmt.where(func.date(Booking.booking_date) >= filters.start_date)
-        if filters.end_date:
-            stmt = stmt.where(func.date(Booking.booking_date) <= filters.end_date)
+        if start_utc:
+            stmt = stmt.where(Booking.booking_date >= start_utc)
+        if end_utc:
+            stmt = stmt.where(Booking.booking_date <= end_utc)
+        if filters.service_type:
+            stmt = stmt.where(Booking.type == filters.service_type)
         res = await db.execute(stmt)
         bookings = res.scalars().all()
 
-        # Group by service type
-        by_type: Dict[str, Dict[str, Any]] = {}
+        by_type_curr: Dict[tuple[str, str], Dict[str, Any]] = {}
+        totals_by_curr: Dict[str, Dict[str, Decimal]] = {}
+        total_yer_equiv = Decimal("0.00")
+
         for b in bookings:
-            t = b.type.value
-            if t not in by_type:
-                by_type[t] = {"count": 0, "sales": Decimal("0.00"), "cost": Decimal("0.00")}
-            by_type[t]["count"] += 1
-            by_type[t]["sales"] += b.selling_price
-            by_type[t]["cost"] += b.cost_price
+            t_val = b.type.value if hasattr(b.type, "value") else str(b.type)
+            curr = (b.currency or "YER").upper()
+            key = (t_val, curr)
+            if key not in by_type_curr:
+                by_type_curr[key] = {"count": 0, "sales": Decimal("0.00"), "cost": Decimal("0.00")}
+            by_type_curr[key]["count"] += 1
+            by_type_curr[key]["sales"] += Decimal(str(b.selling_price))
+            by_type_curr[key]["cost"] += Decimal(str(b.cost_price))
+
+            if curr not in totals_by_curr:
+                totals_by_curr[curr] = {"sales": Decimal("0.00"), "cost": Decimal("0.00"), "net": Decimal("0.00")}
+            totals_by_curr[curr]["sales"] += Decimal(str(b.selling_price))
+            totals_by_curr[curr]["cost"] += Decimal(str(b.cost_price))
+            totals_by_curr[curr]["net"] += Decimal(str(b.selling_price)) - Decimal(str(b.cost_price))
+
+            rate = rates_map.get(curr, Decimal("1.0000"))
+            total_yer_equiv += (Decimal(str(b.selling_price)) * rate).quantize(Decimal("0.01"))
 
         rows = []
-        for t, data in by_type.items():
+        for (t_val, curr), data in by_type_curr.items():
             net = data["sales"] - data["cost"]
             rows.append({
-                "نوع الخدمة": t,
+                "نوع الخدمة": SERVICE_LABELS.get(t_val, t_val),
+                "العملة": curr,
                 "عدد الحجوزات": data["count"],
-                "إجمالي المبيعات": float(data["sales"]),
-                "إجمالي التكلفة": float(data["cost"]),
-                "صافي الإيراد": float(net),
+                "إجمالي المبيعات": float(data["sales"].quantize(Decimal("0.01"))),
+                "إجمالي التكلفة": float(data["cost"].quantize(Decimal("0.01"))),
+                "صافي الإيراد": float(net.quantize(Decimal("0.01"))),
             })
 
-        total_sales = sum(r["إجمالي المبيعات"] for r in rows)
+        formatted_curr_totals = {
+            c: {
+                "sales": float(vals["sales"].quantize(Decimal("0.01"))),
+                "cost": float(vals["cost"].quantize(Decimal("0.01"))),
+                "net": float(vals["net"].quantize(Decimal("0.01"))),
+            }
+            for c, vals in totals_by_curr.items()
+        }
+
         return ReportSummary(
-            title="تقرير الإيرادات",
+            title="تقرير الإيرادات والمبيعات",
             report_type="revenue",
             period=period_str,
             total_count=len(bookings),
-            total_amount=Decimal(str(total_sales)),
+            total_amount=total_yer_equiv,
+            totals_by_currency=formatted_curr_totals,
             rows=rows,
         )
 
     # 3. Expenses Report
     elif filters.report_type == "expenses":
-        stmt = select(FinancialTransaction).where(
-            FinancialTransaction.type == TransactionType.EXPENSE,
-            FinancialTransaction.is_void == False,
+        stmt = (
+            select(FinancialTransaction)
+            .where(
+                FinancialTransaction.type == TransactionType.EXPENSE,
+                FinancialTransaction.is_void == False,
+            )
+            .order_by(FinancialTransaction.transaction_date.asc(), FinancialTransaction.id.asc())
         )
         if filters.start_date:
             stmt = stmt.where(FinancialTransaction.transaction_date >= filters.start_date)
@@ -142,34 +214,45 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
         res = await db.execute(stmt)
         txs = res.scalars().all()
 
-        rows = [
-            {
+        totals_by_curr: Dict[str, Decimal] = {}
+        total_yer_equiv = Decimal("0.00")
+        rows = []
+
+        for t in txs:
+            curr = (t.currency or "YER").upper()
+            pm_val = t.payment_method.value if hasattr(t.payment_method, "value") else str(t.payment_method)
+            amt = Decimal(str(t.amount))
+            totals_by_curr[curr] = totals_by_curr.get(curr, Decimal("0.00")) + amt
+            rate = rates_map.get(curr, Decimal("1.0000"))
+            total_yer_equiv += (amt * rate).quantize(Decimal("0.01"))
+
+            rows.append({
                 "رقم السند": t.transaction_id,
                 "النوع": t.expense_type or "مصروف عام",
-                "المبلغ": float(t.amount),
-                "العملة": t.currency,
+                "المبلغ": float(amt.quantize(Decimal("0.01"))),
+                "العملة": curr,
+                "طريقة الدفع": PAYMENT_METHOD_LABELS.get(pm_val, pm_val),
                 "التاريخ": str(t.transaction_date),
                 "ملاحظات": t.notes or "--",
-            }
-            for t in txs
-        ]
-        total_amount = sum(t.amount for t in txs)
+            })
+
         return ReportSummary(
             title="تقرير المصروفات",
             report_type="expenses",
             period=period_str,
             total_count=len(txs),
-            total_amount=total_amount,
+            total_amount=total_yer_equiv,
+            totals_by_currency={k: float(v.quantize(Decimal("0.01"))) for k, v in totals_by_curr.items()},
             rows=rows,
         )
 
-    # 4. Profit & Loss Report
+    # 4. Profit & Loss Report (Separated per Currency + Base YER Equivalent)
     elif filters.report_type == "profit_loss":
         b_stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED)
-        if filters.start_date:
-            b_stmt = b_stmt.where(func.date(Booking.booking_date) >= filters.start_date)
-        if filters.end_date:
-            b_stmt = b_stmt.where(func.date(Booking.booking_date) <= filters.end_date)
+        if start_utc:
+            b_stmt = b_stmt.where(Booking.booking_date >= start_utc)
+        if end_utc:
+            b_stmt = b_stmt.where(Booking.booking_date <= end_utc)
         b_res = await db.execute(b_stmt)
         bookings = b_res.scalars().all()
 
@@ -184,103 +267,196 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
         e_res = await db.execute(e_stmt)
         expenses = e_res.scalars().all()
 
-        total_sales = sum(b.selling_price for b in bookings)
-        total_cost = sum(b.cost_price for b in bookings)
-        gross_profit = total_sales - total_cost
-        total_exp = sum(e.amount for e in expenses)
-        net_profit = gross_profit - total_exp
+        by_curr: Dict[str, Dict[str, Decimal]] = {}
+        for curr in ("YER", "SAR", "USD"):
+            by_curr[curr] = {
+                "sales": Decimal("0.00"),
+                "cost": Decimal("0.00"),
+                "expenses": Decimal("0.00"),
+            }
 
-        rows = [
-            {"البند": "إجمالي المبيعات", "المبلغ": float(total_sales)},
-            {"البند": "تكلفة الحجوزات", "المبلغ": float(total_cost)},
-            {"البند": "إجمالي الربح التشغيلي", "المبلغ": float(gross_profit)},
-            {"البند": "المصروفات العمومية", "المبلغ": float(total_exp)},
-            {"البند": "صافي الربح / الخسارة", "المبلغ": float(net_profit)},
-        ]
+        for b in bookings:
+            c = (b.currency or "YER").upper()
+            if c not in by_curr:
+                by_curr[c] = {"sales": Decimal("0.00"), "cost": Decimal("0.00"), "expenses": Decimal("0.00")}
+            by_curr[c]["sales"] += Decimal(str(b.selling_price))
+            by_curr[c]["cost"] += Decimal(str(b.cost_price))
+
+        for e in expenses:
+            c = (e.currency or "YER").upper()
+            if c not in by_curr:
+                by_curr[c] = {"sales": Decimal("0.00"), "cost": Decimal("0.00"), "expenses": Decimal("0.00")}
+            by_curr[c]["expenses"] += Decimal(str(e.amount))
+
+        rows = []
+        totals_by_curr = {}
+        total_net_yer = Decimal("0.00")
+
+        for curr, vals in by_curr.items():
+            sales_c = vals["sales"]
+            cost_c = vals["cost"]
+            exp_c = vals["expenses"]
+            if sales_c == 0 and cost_c == 0 and exp_c == 0:
+                continue
+            gross_c = sales_c - cost_c
+            net_c = gross_c - exp_c
+            rate = rates_map.get(curr, Decimal("1.0000"))
+            total_net_yer += (net_c * rate).quantize(Decimal("0.01"))
+
+            totals_by_curr[curr] = float(net_c.quantize(Decimal("0.01")))
+            rows.append({
+                "العملة": curr,
+                "إجمالي المبيعات": float(sales_c.quantize(Decimal("0.01"))),
+                "تكلفة الحجوزات": float(cost_c.quantize(Decimal("0.01"))),
+                "إجمالي الربح التشغيلي": float(gross_c.quantize(Decimal("0.01"))),
+                "المصروفات العمومية": float(exp_c.quantize(Decimal("0.01"))),
+                "صافي الربح / الخسارة": float(net_c.quantize(Decimal("0.01"))),
+            })
+
         return ReportSummary(
             title="تقرير الأرباح والخسائر",
             report_type="profit_loss",
             period=period_str,
             total_count=len(bookings) + len(expenses),
-            total_amount=net_profit,
+            total_amount=total_net_yer,
+            totals_by_currency=totals_by_curr,
             rows=rows,
         )
 
-    # 5. Debts Report
+    # 5. Debts Report (100% Read-Only from General Ledger grouped by Entity & Currency)
     elif filters.report_type == "debts":
-        await sync_all_entity_balances(db)
-        cust_res = await db.execute(select(Customer).where(Customer.balance > 0))
-        custs = cust_res.scalars().all()
-        supp_res = await db.execute(select(Supplier).where(Supplier.balance != 0))
-        supps = supp_res.scalars().all()
+        cust_map = {c.id: c for c in (await db.execute(select(Customer))).scalars().all()}
+        supp_map = {s.id: s for s in (await db.execute(select(Supplier))).scalars().all()}
+
+        agg_stmt = (
+            select(
+                Account.entity_type,
+                Account.entity_id,
+                Account.currency,
+                func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000")),
+                func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == Account.id)
+            .where(Account.entity_type.in_([EntityAccountType.CUSTOMER, EntityAccountType.SUPPLIER]))
+            .group_by(Account.entity_type, Account.entity_id, Account.currency)
+        )
+        agg_rows = (await db.execute(agg_stmt)).all()
 
         rows = []
-        for c in custs:
-            rows.append({
-                "نوع الحساب": "عميل (مدين للمكتب)",
-                "الاسم": c.name,
-                "الهاتف": c.phone_number,
-                "الرصيد المستحق": float(c.balance),
-            })
-        for s in supps:
-            rows.append({
-                "نوع الحساب": "مورد",
-                "الاسم": s.name,
-                "الهاتف": s.phone_number,
-                "الرصيد المستحق": float(s.balance),
-            })
+        totals_by_curr: Dict[str, Decimal] = {}
+        total_debts_yer = Decimal("0.00")
 
-        total_debts = sum(c.balance for c in custs)
+        for ent_type, ent_id, curr_enum, sum_debit, sum_credit in agg_rows:
+            curr = curr_enum.value if hasattr(curr_enum, "value") else str(curr_enum)
+            d_val = Decimal(str(sum_debit))
+            c_val = Decimal(str(sum_credit))
+            if ent_type == EntityAccountType.CUSTOMER:
+                bal = (d_val - c_val).quantize(Decimal("0.01"))
+                if bal == Decimal("0.00"):
+                    continue
+                c_obj = cust_map.get(ent_id)
+                if not c_obj:
+                    continue
+                direction = "مدين للمكتب (عليه)" if bal > 0 else "دائن للمكتب (له رصيد مقدم)"
+                rows.append({
+                    "نوع الحساب": "عميل",
+                    "الاسم": c_obj.name,
+                    "الهاتف": c_obj.phone_number,
+                    "العملة": curr,
+                    "الرصيد": float(abs(bal)),
+                    "حالة الرصيد": direction,
+                })
+                if bal > 0:
+                    totals_by_curr[curr] = totals_by_curr.get(curr, Decimal("0.00")) + bal
+                    rate = rates_map.get(curr, Decimal("1.0000"))
+                    total_debts_yer += (bal * rate).quantize(Decimal("0.01"))
+            else:
+                bal = (c_val - d_val).quantize(Decimal("0.01"))
+                if bal == Decimal("0.00"):
+                    continue
+                s_obj = supp_map.get(ent_id)
+                if not s_obj:
+                    continue
+                direction = "دائن (مستحق للمورد)" if bal > 0 else "مدين (دفعة مقدمة للمورد)"
+                rows.append({
+                    "نوع الحساب": "مورد",
+                    "الاسم": s_obj.name,
+                    "الهاتف": s_obj.phone_number or "--",
+                    "العملة": curr,
+                    "الرصيد": float(abs(bal)),
+                    "حالة الرصيد": direction,
+                })
+
         return ReportSummary(
             title="تقرير المديونيات والأرصدة",
             report_type="debts",
-            period="الرصيد التراكمي اللحظي",
+            period="الرصيد التراكمي اللحظي حسب العملة",
             total_count=len(rows),
-            total_amount=total_debts,
+            total_amount=total_debts_yer,
+            totals_by_currency={k: float(v.quantize(Decimal("0.01"))) for k, v in totals_by_curr.items()},
             rows=rows,
         )
 
     # 6. Employee Performance Report
     elif filters.report_type == "employee_performance":
-        b_stmt = select(Booking).where(Booking.status != BookingStatus.CANCELLED).options(selectinload(Booking.employee))
-        if filters.start_date:
-            b_stmt = b_stmt.where(func.date(Booking.booking_date) >= filters.start_date)
-        if filters.end_date:
-            b_stmt = b_stmt.where(func.date(Booking.booking_date) <= filters.end_date)
+        b_stmt = (
+            select(Booking)
+            .where(Booking.status != BookingStatus.CANCELLED)
+            .options(selectinload(Booking.employee))
+        )
+        if start_utc:
+            b_stmt = b_stmt.where(Booking.booking_date >= start_utc)
+        if end_utc:
+            b_stmt = b_stmt.where(Booking.booking_date <= end_utc)
 
         b_res = await db.execute(b_stmt)
         bookings = b_res.scalars().all()
 
-        by_emp: Dict[int, Dict[str, Any]] = {}
+        by_emp_curr: Dict[tuple[int, str], Dict[str, Any]] = {}
+        totals_by_curr: Dict[str, Decimal] = {}
+        total_yer_equiv = Decimal("0.00")
+
         for b in bookings:
             emp_id = b.employee_id
             emp_name = b.employee.full_name if b.employee else f"موظف #{emp_id}"
-            if emp_id not in by_emp:
-                by_emp[emp_id] = {"name": emp_name, "count": 0, "sales": Decimal("0.00")}
-            by_emp[emp_id]["count"] += 1
-            by_emp[emp_id]["sales"] += b.selling_price
+            curr = (b.currency or "YER").upper()
+            key = (emp_id, curr)
+            if key not in by_emp_curr:
+                by_emp_curr[key] = {"name": emp_name, "currency": curr, "count": 0, "sales": Decimal("0.00")}
+            by_emp_curr[key]["count"] += 1
+            by_emp_curr[key]["sales"] += Decimal(str(b.selling_price))
+
+            totals_by_curr[curr] = totals_by_curr.get(curr, Decimal("0.00")) + Decimal(str(b.selling_price))
+            rate = rates_map.get(curr, Decimal("1.0000"))
+            total_yer_equiv += (Decimal(str(b.selling_price)) * rate).quantize(Decimal("0.01"))
 
         rows = [
             {
                 "اسم الموظف": data["name"],
+                "العملة": data["currency"],
                 "عدد الحجوزات": data["count"],
-                "إجمالي المبيعات": float(data["sales"]),
+                "إجمالي المبيعات": float(data["sales"].quantize(Decimal("0.01"))),
             }
-            for data in by_emp.values()
+            for data in by_emp_curr.values()
         ]
-        total_sales = sum(r["إجمالي المبيعات"] for r in rows)
+
         return ReportSummary(
             title="تقرير أداء الموظفين",
             report_type="employee_performance",
             period=period_str,
             total_count=len(bookings),
-            total_amount=Decimal(str(total_sales)),
+            total_amount=total_yer_equiv,
+            totals_by_currency={k: float(v.quantize(Decimal("0.01"))) for k, v in totals_by_curr.items()},
             rows=rows,
         )
 
-    # 7. Cash Flow Report
+    # 7. Cash Flow Report (Chronological, Currency + PaymentMethod, Separated Payment Out vs Expense)
     elif filters.report_type == "cash_flow":
-        stmt = select(FinancialTransaction).where(FinancialTransaction.is_void == False)
+        stmt = (
+            select(FinancialTransaction)
+            .where(FinancialTransaction.is_void == False)
+            .order_by(FinancialTransaction.transaction_date.asc(), FinancialTransaction.id.asc())
+        )
         if filters.start_date:
             stmt = stmt.where(FinancialTransaction.transaction_date >= filters.start_date)
         if filters.end_date:
@@ -288,28 +464,58 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
         res = await db.execute(stmt)
         txs = res.scalars().all()
 
-        inflow = sum(t.amount for t in txs if t.type == TransactionType.PAYMENT_IN)
-        outflow = sum(t.amount for t in txs if t.type in [TransactionType.PAYMENT_OUT, TransactionType.EXPENSE])
-        net_cash = inflow - outflow
+        by_curr: Dict[str, Dict[str, Decimal]] = {}
+        total_net_yer = Decimal("0.00")
+        rows = []
 
-        rows = [
-            {
-                "رقم السند": t.transaction_id,
-                "النوع": "قبض (مقبوضات)" if t.type == TransactionType.PAYMENT_IN else "صرف / مصروف",
-                "المبلغ": float(t.amount),
+        for t in txs:
+            curr = (t.currency or "YER").upper()
+            if curr not in by_curr:
+                by_curr[curr] = {"inflow": Decimal("0.00"), "outflow": Decimal("0.00"), "net": Decimal("0.00")}
+
+            amt = Decimal(str(t.amount))
+            if t.type == TransactionType.PAYMENT_IN:
+                tx_label = "سند قبض (مقبوضات)"
+                by_curr[curr]["inflow"] += amt
+                by_curr[curr]["net"] += amt
+            elif t.type == TransactionType.PAYMENT_OUT:
+                tx_label = "سند صرف (مدفوعات)"
+                by_curr[curr]["outflow"] += amt
+                by_curr[curr]["net"] -= amt
+            else:
+                tx_label = f"مصروف تشغيلي ({t.expense_type or 'عام'})"
+                by_curr[curr]["outflow"] += amt
+                by_curr[curr]["net"] -= amt
+
+            pm_val = t.payment_method.value if hasattr(t.payment_method, "value") else str(t.payment_method)
+            rows.append({
                 "التاريخ": str(t.transaction_date),
+                "رقم السند": t.transaction_id,
+                "النوع": tx_label,
+                "طريقة الدفع": PAYMENT_METHOD_LABELS.get(pm_val, pm_val),
+                "المبلغ": float(amt.quantize(Decimal("0.01"))),
+                "العملة": curr,
                 "ملاحظات": t.notes or "--",
+            })
+
+        formatted_curr = {}
+        for c, vals in by_curr.items():
+            rate = rates_map.get(c, Decimal("1.0000"))
+            total_net_yer += (vals["net"] * rate).quantize(Decimal("0.01"))
+            formatted_curr[c] = {
+                "inflow": float(vals["inflow"].quantize(Decimal("0.01"))),
+                "outflow": float(vals["outflow"].quantize(Decimal("0.01"))),
+                "net": float(vals["net"].quantize(Decimal("0.01"))),
             }
-            for t in txs
-        ]
 
         return ReportSummary(
             title="تقرير التدفق النقدي",
             report_type="cash_flow",
             period=period_str,
             total_count=len(txs),
-            total_amount=net_cash,
-            additional_totals={"inflow": float(inflow), "outflow": float(outflow), "net": float(net_cash)},
+            total_amount=total_net_yer,
+            totals_by_currency=formatted_curr,
+            additional_totals=formatted_curr,
             rows=rows,
         )
 
@@ -349,7 +555,7 @@ async def export_pdf(
 ):
     summary = await build_report(filters, current_user, db)
     pdf_bytes, is_pdf = export_report_to_pdf(summary)
-    
+
     if is_pdf:
         return Response(
             content=pdf_bytes,
@@ -359,5 +565,5 @@ async def export_pdf(
     else:
         return Response(
             content=pdf_bytes,
-            media_type="text/html; charset=utf-8"
+            media_type="text/html; charset=utf-8",
         )

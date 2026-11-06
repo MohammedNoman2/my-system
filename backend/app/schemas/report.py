@@ -23,5 +23,6 @@ class ReportSummary(BaseModel):
     period: str
     total_count: int = 0
     total_amount: Decimal = Decimal("0.00")
+    totals_by_currency: Dict[str, Any] = {}
     additional_totals: Dict[str, Any] = {}
     rows: List[Dict[str, Any]] = []

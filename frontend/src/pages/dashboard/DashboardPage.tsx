@@ -64,21 +64,8 @@ export function DashboardPage() {
     );
   }
 
-  // Demo chart data (if no live monthly series, dynamic mockup based on current stats)
-  const monthlyChartData = [
-    { name: 'يناير', sales: (summary?.total_sales || 100000) * 0.4, expenses: (summary?.total_expenses || 40000) * 0.3 },
-    { name: 'فبراير', sales: (summary?.total_sales || 100000) * 0.6, expenses: (summary?.total_expenses || 40000) * 0.5 },
-    { name: 'مارس', sales: (summary?.total_sales || 100000) * 0.8, expenses: (summary?.total_expenses || 40000) * 0.7 },
-    { name: 'الشهر الحالي', sales: summary?.month_sales || summary?.total_sales || 0, expenses: summary?.total_expenses || 0 },
-  ];
-
-  const servicesDistribution = [
-    { name: 'طيران', value: 35 },
-    { name: 'نقل بري', value: 25 },
-    { name: 'تأشيرات', value: 15 },
-    { name: 'جوازات', value: 15 },
-    { name: 'طرود', value: 10 },
-  ];
+  const monthlyChartData = summary?.monthly_series || [];
+  const servicesDistribution = summary?.services_distribution || [];
 
   const isEmployee = role === 'employee';
 
@@ -307,11 +294,11 @@ export function DashboardPage() {
                   paddingAngle={5}
                   dataKey="value"
                 >
-                  {servicesDistribution.map((entry, index) => (
+                  {servicesDistribution.map((entry: any, index: number) => (
                     <Cell key={`cell-${index}`} fill={SERVICE_COLORS[index % SERVICE_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: any) => [`${value}%`, 'النسبة']} />
+                <Tooltip formatter={(value: any) => [`${value} حجز`, 'العدد الفعلي']} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
               </PieChart>
             </ResponsiveContainer>

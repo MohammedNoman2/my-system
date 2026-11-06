@@ -50,5 +50,56 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+from datetime import date, datetime, time, timezone, timedelta
+
+OFFICE_TZ = timezone(timedelta(hours=3))  # توقيت صنعاء الرسمي (UTC+3)
+
+
+def office_now() -> datetime:
+    """يرجع الوقت الحالي بتوقيت المكتب (UTC+3)."""
+    return datetime.now(OFFICE_TZ)
+
+
+def office_today() -> date:
+    """يرجع تاريخ اليوم التجاري الحالي بتوقيت المكتب (UTC+3)."""
+    return datetime.now(OFFICE_TZ).date()
+
+
+def to_office_time(dt: Optional[datetime]) -> Optional[datetime]:
+    """يحول أي كائن datetime مخزن بـ UTC إلى توقيت المكتب (UTC+3) للعرض والطباعة."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(OFFICE_TZ)
+
+
+def format_office_dt(dt: Optional[datetime], fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """ينسق التاريخ والوقت بتوقيت المكتب (UTC+3)."""
+    odt = to_office_time(dt)
+    return odt.strftime(fmt) if odt else "--"
+
+
+def office_date_range_utc(
+    start_d: Optional[date], end_d: Optional[date]
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """
+    يحول نطاق التاريخ المحلي للمكتب (UTC+3) إلى حدود UTC معرفة المنطقة الزمنية (timezone.utc)
+    لمطابقة الأعمدة المخزنة بصيغة UTC في SQLite وPostgreSQL (timestamptz) بدقة تامة.
+    مثال: يوم 2026-11-02 بتوقيت صنعاء يمتد من 2026-11-01 21:00:00+00:00 إلى 2026-11-02 20:59:59.999999+00:00.
+    """
+    start_utc = None
+    end_utc = None
+    if start_d:
+        start_utc = datetime.combine(start_d, time.min, tzinfo=OFFICE_TZ).astimezone(
+            timezone.utc
+        )
+    if end_d:
+        end_utc = datetime.combine(end_d, time.max, tzinfo=OFFICE_TZ).astimezone(
+            timezone.utc
+        )
+    return start_utc, end_utc
+
+
 settings = Settings()
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)

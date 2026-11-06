@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart3,
   FileSpreadsheet,
@@ -568,12 +568,39 @@ export function ReportsPage() {
 
                   <Card className="border-r-4 border-r-amber-500">
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-xs font-semibold text-slate-500">المبلغ الإجمالي</CardTitle>
+                      <CardTitle className="text-xs font-semibold text-slate-500">إجمالي العملات (منفصل + معادل YER)</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <p className="text-2xl font-black text-emerald-700">
-                        {Number(reportData.total_amount).toLocaleString()} YER
-                      </p>
+                      {reportData.totals_by_currency && Object.keys(reportData.totals_by_currency).length > 0 ? (
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(reportData.totals_by_currency).map(([curr, val]: [string, any]) => {
+                              const displayVal =
+                                typeof val === 'object' && val !== null
+                                  ? val.sales !== undefined
+                                    ? `مبيعات: ${Number(val.sales).toLocaleString()} | صافي: ${Number(val.net).toLocaleString()}`
+                                    : `صافي: ${Number(val.net).toLocaleString()}`
+                                  : Number(val).toLocaleString();
+                              return (
+                                <span
+                                  key={curr}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200"
+                                >
+                                  <span>{displayVal}</span>
+                                  <span className="text-[#1e3a8a]">{curr}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            المعادل التقديري الإجمالي: <span className="font-bold text-emerald-700">{Number(reportData.total_amount).toLocaleString()} YER</span>
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-2xl font-black text-emerald-700">
+                          {Number(reportData.total_amount).toLocaleString()} YER
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
                 </div>

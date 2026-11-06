@@ -239,7 +239,8 @@ export interface ReportSummary {
   period: string;
   total_count: number;
   total_amount: number;
-  additional_totals?: Record<string, number>;
+  totals_by_currency?: Record<string, any>;
+  additional_totals?: Record<string, any>;
   rows: Array<Record<string, any>>;
 }
 

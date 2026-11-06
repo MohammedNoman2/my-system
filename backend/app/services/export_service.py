@@ -15,6 +15,23 @@ except Exception as e:
     logger.warning(f"WeasyPrint native libraries not loaded ({e}); PDF export fallback active.")
 
 
+def _format_currency_totals_summary(report: ReportSummary) -> str:
+    tbc = getattr(report, "totals_by_currency", None) or {}
+    if not tbc:
+        return f"الإجمالي المعادل: {float(report.total_amount):,.2f} YER"
+    parts = []
+    for curr, val in tbc.items():
+        if isinstance(val, dict):
+            if "sales" in val:
+                parts.append(f"{curr}: مبيعات {val['sales']:,.2f} | صافي {val['net']:,.2f}")
+            elif "inflow" in val:
+                parts.append(f"{curr}: مقبوضات {val['inflow']:,.2f} | مدفوعات {val['outflow']:,.2f} | صافي {val['net']:,.2f}")
+        else:
+            parts.append(f"{curr}: {float(val):,.2f}")
+    joined = "  ||  ".join(parts)
+    return f"{joined}  (المعادل التقديري: {float(report.total_amount):,.2f} YER)"
+
+
 def export_report_to_excel(report: ReportSummary) -> bytes:
     try:
         wb = openpyxl.Workbook()
@@ -29,7 +46,7 @@ def export_report_to_excel(report: ReportSummary) -> bytes:
         ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws.merge_cells("A1:G1")
     
-        ws["A2"] = f"الفترة / المعيار: {report.period}"
+        ws["A2"] = f"الفترة / المعيار: {report.period} | {_format_currency_totals_summary(report)}"
         ws["A2"].font = Font(name="Cairo", size=11, italic=True)
         ws.merge_cells("A2:G2")
     
@@ -130,7 +147,7 @@ def export_report_to_pdf(report: ReportSummary) -> tuple[bytes, bool]:
         <div class="title-box">
             <h1>{report.title}</h1>
             <p>الفترة / المعيار: {report.period}</p>
-            <p>إجمالي العمليات: {report.total_count} | الإجمالي المالي: {report.total_amount}</p>
+            <p>إجمالي العمليات: {report.total_count} | {_format_currency_totals_summary(report)}</p>
         </div>
         <table>
             <thead><tr>{headers_html}</tr></thead>

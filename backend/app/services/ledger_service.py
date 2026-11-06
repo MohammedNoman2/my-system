@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.models.accounting import Account, JournalEntry, JournalEntryLine, EntityAccountType, AccountCurrency
 from app.models.customer import Customer
 from app.models.supplier import Supplier
+from app.core.config import to_office_time
 
 async def get_ledger_statement(
     db: AsyncSession,
@@ -76,7 +77,7 @@ async def get_ledger_statement(
         total_credit = Decimal("0.00")
         
         for line, je in cur_rows:
-            je_date = je.date.date() if isinstance(je.date, datetime) else je.date
+            je_date = to_office_time(je.date).date() if isinstance(je.date, datetime) else je.date
             
             is_before = False
             if from_date and je_date < from_date:
