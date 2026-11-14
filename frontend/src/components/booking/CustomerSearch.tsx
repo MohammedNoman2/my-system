@@ -93,8 +93,8 @@ export function CustomerSearch({
                 {selectedCustomer.id_number && (
                   <span>هوية: {selectedCustomer.id_number}</span>
                 )}
-                <span className="font-semibold text-emerald-700">
-                  رصيد: {Number(selectedCustomer.balance).toLocaleString()} YER
+                <span className={`font-semibold ${Number(selectedCustomer.balance) > 0 ? 'text-red-600' : Number(selectedCustomer.balance) < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
+                  الرصيد المعادل: {Math.abs(Number(selectedCustomer.balance)).toLocaleString()} YER ({Number(selectedCustomer.balance) > 0 ? 'عليه' : Number(selectedCustomer.balance) < 0 ? 'له رصيد دائن' : 'متزن'})
                 </span>
               </div>
             </div>

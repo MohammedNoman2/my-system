@@ -109,15 +109,26 @@ export function LedgerModal({
   const ledgers = data?.ledgers || {};
   const currencies = Object.keys(ledgers).filter(c => ledgers[c].entries.length > 0 || ledgers[c].opening_balance !== 0);
 
+  const fmt2 = (v: any) =>
+    Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const getBalBadgeClass = (bal: number) => {
+    if (bal === 0) return 'bg-slate-100 text-slate-600';
+    if (entityType === 'customer') {
+      return bal > 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700';
+    }
+    return bal > 0 ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-700';
+  };
+
   const renderLedgerTable = (curr: string, ledger: any) => (
     <div key={curr} className="mb-6 border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
         <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-2 justify-between items-center">
             <h3 className="font-bold text-slate-800">كشف حساب ({curr})</h3>
-            <div className="flex gap-4 text-xs font-semibold">
-                <span>افتتاحي: {Number(ledger.opening_balance).toLocaleString()}</span>
-                <span className="text-red-600">مدين: {Number(ledger.total_debit).toLocaleString()}</span>
-                <span className="text-emerald-600">دائن: {Number(ledger.total_credit).toLocaleString()}</span>
-                <span className="text-blue-700">ختامي: {Number(ledger.closing_balance).toLocaleString()}</span>
+            <div className="flex flex-wrap gap-4 text-xs font-semibold">
+                <span>افتتاحي: {fmt2(ledger.opening_balance)} ({ledger.opening_balance_label || 'متزن'})</span>
+                <span className="text-red-600">إجمالي مدين: {fmt2(ledger.total_debit)}</span>
+                <span className="text-emerald-600">إجمالي دائن: {fmt2(ledger.total_credit)}</span>
+                <span className="text-blue-700">ختامي: {fmt2(ledger.closing_balance)} ({ledger.closing_balance_label || 'متزن'})</span>
             </div>
         </div>
         {ledger.entries.length === 0 ? (
@@ -129,9 +140,9 @@ export function LedgerModal({
                   <tr>
                     <th className="px-3.5 py-3">التاريخ</th>
                     <th className="px-3.5 py-3">رقم المرجع</th>
-                    <th className="px-3.5 py-3">البيان / الوصف</th>
-                    <th className="px-3.5 py-3 text-red-700">مدين (+)</th>
-                    <th className="px-3.5 py-3 text-emerald-700">دائن (-)</th>
+                    <th className="px-3.5 py-3">البيان / الوصف التفصيلي</th>
+                    <th className="px-3.5 py-3 text-red-700">{entityType === 'customer' ? 'مدين (عليه +)' : 'مدين (سداد -)'}</th>
+                    <th className="px-3.5 py-3 text-emerald-700">{entityType === 'customer' ? 'دائن (له -)' : 'دائن (مستحق +)'}</th>
                     <th className="px-3.5 py-3 font-bold">الرصيد التراكمي</th>
                   </tr>
                 </thead>
@@ -148,13 +159,18 @@ export function LedgerModal({
                         {item.description}
                       </td>
                       <td className="px-3.5 py-2.5 font-semibold text-red-600">
-                        {Number(item.debit) > 0 ? Number(item.debit).toLocaleString() : '--'}
+                        {Number(item.debit) > 0 ? fmt2(item.debit) : '--'}
                       </td>
                       <td className="px-3.5 py-2.5 font-semibold text-emerald-600">
-                        {Number(item.credit) > 0 ? Number(item.credit).toLocaleString() : '--'}
+                        {Number(item.credit) > 0 ? fmt2(item.credit) : '--'}
                       </td>
                       <td className="px-3.5 py-2.5 font-bold font-mono text-slate-900">
-                        {Number(item.balance).toLocaleString()} {curr}
+                        <span>{fmt2(item.balance)} {curr}</span>
+                        {item.balance_label && (
+                          <span className={`mr-1.5 text-[11px] px-1.5 py-0.5 rounded ${getBalBadgeClass(Number(item.balance))}`}>
+                            {item.balance_label}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -192,14 +208,31 @@ export function LedgerModal({
 
         {/* Closing Balances Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {['YER', 'SAR', 'USD'].map(curr => (
-                <div key={curr} className="p-4 bg-white border border-slate-200 rounded-lg shadow-sm text-center">
-                    <p className="text-sm text-slate-500">الرصيد الختامي ({curr})</p>
-                    <p className={`text-xl font-bold ${Number(ledgers[curr]?.closing_balance) > 0 ? 'text-red-600' : Number(ledgers[curr]?.closing_balance) < 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
-                        {ledgers[curr] ? Number(ledgers[curr].closing_balance).toLocaleString() : '0.00'}
-                    </p>
-                </div>
-            ))}
+            {['YER', 'SAR', 'USD'].map(curr => {
+                const closeBal = Number(ledgers[curr]?.closing_balance || 0);
+                const closeLbl = ledgers[curr]?.closing_balance_label || 'متزن';
+                const textCol =
+                  closeBal === 0
+                    ? 'text-slate-800'
+                    : entityType === 'customer'
+                    ? closeBal > 0
+                      ? 'text-red-600'
+                      : 'text-emerald-600'
+                    : closeBal > 0
+                    ? 'text-amber-700'
+                    : 'text-emerald-600';
+                return (
+                  <div key={curr} className="p-4 bg-white border border-slate-200 rounded-lg shadow-sm text-center">
+                      <p className="text-sm text-slate-500">الرصيد الختامي ({curr})</p>
+                      <p className={`text-xl font-bold ${textCol}`}>
+                          {ledgers[curr] ? fmt2(closeBal) : '0.00'}
+                      </p>
+                      <span className={`inline-block mt-1 text-xs font-bold px-2 py-0.5 rounded-full ${getBalBadgeClass(closeBal)}`}>
+                          {closeLbl}
+                      </span>
+                  </div>
+                );
+            })}
         </div>
 
         {/* Currency Tabs */}

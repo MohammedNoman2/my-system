@@ -127,6 +127,7 @@ export function FlightBookingForm({ onSuccess, onCancel }: FlightBookingFormProp
         supplier_name: (values as any).supplier_name || null,
         ...(isEmployee ? {} : { cost_price: values.cost_price || 0 }),
         notes: values.notes || null,
+        use_credit_balance: (values as any).use_credit_balance ?? true,
         flight_details: {
           airline_company: values.airline_company,
           flight_number: values.flight_number,
@@ -326,7 +327,7 @@ export function FlightBookingForm({ onSuccess, onCancel }: FlightBookingFormProp
         {/* Step 3: Financials */}
         {currentStep === 3 && (
           <div className="animate-in fade-in duration-200">
-            <BookingFinancialStep form={form as any} />
+            <BookingFinancialStep form={form as any} selectedCustomer={selectedCustomer} />
           </div>
         )}
 

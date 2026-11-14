@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import api from '../../services/api';
 import { useUIStore } from '../../context/uiStore';
@@ -7,7 +7,13 @@ import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 
 interface BookingCancelModalProps {
-  booking: { id: number; ticket_number: string; paid_amount: number } | null;
+  booking: {
+    id: number;
+    ticket_number: string;
+    paid_amount: number;
+    credit_applied?: number;
+    currency?: string;
+  } | null;
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
@@ -20,9 +26,23 @@ export function BookingCancelModal({
   onSuccess,
 }: BookingCancelModalProps) {
   const [reason, setReason] = useState('');
-  const [refundAmount, setRefundAmount] = useState(booking?.paid_amount || 0);
+  const [refundAmount, setRefundAmount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const addToast = useUIStore((state) => state.addToast);
+
+  const creditApplied = Number(booking?.credit_applied || 0);
+  const cashPaid = Math.max(
+    0,
+    Number((Number(booking?.paid_amount || 0) - creditApplied).toFixed(2))
+  );
+  const curr = booking?.currency || 'YER';
+
+  useEffect(() => {
+    if (booking && isOpen) {
+      setRefundAmount(cashPaid);
+      setReason('');
+    }
+  }, [booking, isOpen, cashPaid]);
 
   if (!booking) return null;
 
@@ -61,10 +81,17 @@ export function BookingCancelModal({
       <form onSubmit={handleCancel} className="space-y-4">
         <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <span>
-            تنبيه: المبلغ المدفوع مسبقاً في هذا الحجز هو ({booking.paid_amount.toLocaleString()} ريال).
-            أي مبلغ مسترد سيتم خصمه من مستحقات العميل ويُسجل في سجل التدقيق.
-          </span>
+          <div className="space-y-1">
+            <p>
+              تنبيه: المبلغ المدفوع نقداً في هذا الحجز هو ({cashPaid.toLocaleString()} {curr}).
+              أي مبلغ مسترد نقداً سيتم خصمه من الصندوق ويُسجل في سجل التدقيق.
+            </p>
+            {creditApplied > 0 && (
+              <p className="font-bold text-emerald-800">
+                سيتم تلقائياً إعادة الرصيد الدائن المخصوم ({creditApplied.toLocaleString()} {curr}) إلى رصيد العميل المتاح في حسابه.
+              </p>
+            )}
+          </div>
         </div>
 
         <div>
@@ -82,12 +109,13 @@ export function BookingCancelModal({
         </div>
 
         <Input
-          label="المبلغ المسترد للعميل"
+          label={`المبلغ المسترد نقداً للعميل (${curr})`}
           type="number"
           step="0.01"
+          max={cashPaid}
           value={refundAmount}
           onChange={(e) => setRefundAmount(Number(e.target.value))}
-          helperText="المبلغ الذي تم إرجاعه فعلياً للعميل"
+          helperText={`الحد الأقصى للاسترداد النقدي: ${cashPaid.toLocaleString()} ${curr}`}
         />
 
         <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">

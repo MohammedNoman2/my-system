@@ -201,12 +201,12 @@ def export_ledger_to_excel(data: dict) -> bytes:
                 try: return float(val)
                 except: return 0.0
             
-            # Summary row
+            close_lbl = ledger.get("closing_balance_label", "")
             ws.append(["الرصيد الافتتاحي", safe_float(ledger["opening_balance"]), "إجمالي مدين", safe_float(ledger["total_debit"]), "إجمالي دائن", safe_float(ledger["total_credit"])])
-            ws.append(["الرصيد الختامي", safe_float(ledger["closing_balance"]), "", "", "", ""])
+            ws.append(["الرصيد الختامي", f"{safe_float(ledger['closing_balance']):,.2f} ({close_lbl})", "", "", "", ""])
             ws.append([]) # Empty row
             
-            headers = ["التاريخ", "المرجع", "البيان", "مدين", "دائن", "الرصيد"]
+            headers = ["التاريخ", "المرجع", "البيان", "مدين", "دائن", "الرصيد التراكمي"]
             ws.append(headers)
             
             header_row = ws[ws.max_row]
@@ -216,9 +216,9 @@ def export_ledger_to_excel(data: dict) -> bytes:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 
             for e in ledger["entries"]:
-                # Ensure date is string
                 date_val = str(e["date"]) if e["date"] is not None else ""
-                row = [date_val, e["reference_id"], e["description"], safe_float(e["debit"]), safe_float(e["credit"]), safe_float(e["balance"])]
+                bal_str = f"{safe_float(e['balance']):,.2f} ({e.get('balance_label', '')})"
+                row = [date_val, e["reference_id"], e["description"], round(safe_float(e["debit"]), 2), round(safe_float(e["credit"]), 2), bal_str]
                 ws.append(row)
                 for cell in ws[ws.max_row]:
                     if type(cell).__name__ == 'MergedCell': continue
@@ -229,7 +229,7 @@ def export_ledger_to_excel(data: dict) -> bytes:
             from openpyxl.utils import get_column_letter
             for col_idx in range(1, 7):
                 col_letter = get_column_letter(col_idx)
-                ws.column_dimensions[col_letter].width = 20
+                ws.column_dimensions[col_letter].width = 35 if col_idx == 3 else 20
                 
         if not wb.sheetnames:
             wb.create_sheet(title="No Data")
@@ -252,22 +252,33 @@ def export_ledger_to_pdf(data: dict) -> tuple[bytes, bool]:
         if not ledger["entries"] and ledger["opening_balance"] == 0:
             continue
             
+        close_lbl = ledger.get("closing_balance_label", "")
         rows_html = ""
         for e in ledger["entries"]:
-            rows_html += f"<tr><td>{e['date']}</td><td>{e['reference_id']}</td><td>{e['description']}</td><td>{e['debit']}</td><td>{e['credit']}</td><td>{e['balance']}</td></tr>"
+            b_lbl = e.get("balance_label", "")
+            rows_html += (
+                f"<tr>"
+                f"<td>{e['date']}</td>"
+                f"<td>{e['reference_id']}</td>"
+                f"<td style='text-align:right;'>{e['description']}</td>"
+                f"<td>{float(e['debit']):,.2f}</td>"
+                f"<td>{float(e['credit']):,.2f}</td>"
+                f"<td><strong>{float(e['balance']):,.2f}</strong> <span style='font-size:10px;color:#4b5563;'>({b_lbl})</span></td>"
+                f"</tr>"
+            )
             
         sections_html += f"""
         <div style="margin-top: 20px;">
             <h2 style="color: #1e3a8a; font-size: 16px;">كشف حساب ({currency})</h2>
             <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 10px; padding: 10px; background: #f3f4f6;">
-                <div>الرصيد الافتتاحي: <strong>{ledger['opening_balance']}</strong></div>
-                <div>إجمالي مدين: <strong>{ledger['total_debit']}</strong></div>
-                <div>إجمالي دائن: <strong>{ledger['total_credit']}</strong></div>
-                <div>الرصيد الختامي: <strong>{ledger['closing_balance']}</strong></div>
+                <div>الرصيد الافتتاحي: <strong>{float(ledger['opening_balance']):,.2f}</strong></div>
+                <div>إجمالي مدين: <strong>{float(ledger['total_debit']):,.2f}</strong></div>
+                <div>إجمالي دائن: <strong>{float(ledger['total_credit']):,.2f}</strong></div>
+                <div>الرصيد الختامي: <strong>{float(ledger['closing_balance']):,.2f} ({close_lbl})</strong></div>
             </div>
             <table>
                 <thead>
-                    <tr><th>التاريخ</th><th>المرجع</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr>
+                    <tr><th>التاريخ</th><th>المرجع</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد التراكمي</th></tr>
                 </thead>
                 <tbody>{rows_html}</tbody>
             </table>

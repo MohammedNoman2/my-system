@@ -95,6 +95,7 @@ export interface Customer {
   nationality?: string | null;
   notes?: string | null;
   balance: number;
+  credit_balances?: Record<string, number>;
   created_at?: string;
 }
 
@@ -121,6 +122,7 @@ export interface Booking {
   cost_price?: number; // Omitted for employee role
   selling_price: number;
   paid_amount: number;
+  credit_applied?: number;
   remaining_amount: number;
   currency: string;
   supplier_id?: number | null;

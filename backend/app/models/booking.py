@@ -56,6 +56,7 @@ class Booking(Base, TimestampMixin):
     cost_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
+    credit_applied: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
     remaining_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), default="YER", nullable=False)
 

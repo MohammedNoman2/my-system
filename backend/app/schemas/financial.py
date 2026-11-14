@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, Field
+from app.core.config import office_today
 from app.models.financial import EntityType, PaymentMethod, TransactionType
 
 
@@ -14,7 +15,7 @@ class PaymentVoucherCreate(BaseModel):
     reference_number: Optional[str] = None
     booking_id: Optional[int] = None
     notes: Optional[str] = None
-    transaction_date: date
+    transaction_date: date = Field(default_factory=office_today)
 
 
 class ReceiptVoucherCreate(BaseModel):
@@ -26,7 +27,7 @@ class ReceiptVoucherCreate(BaseModel):
     reference_number: Optional[str] = None
     booking_id: Optional[int] = None
     notes: Optional[str] = None
-    transaction_date: date
+    transaction_date: date = Field(default_factory=office_today)
 
 
 class ExpenseCreate(BaseModel):
@@ -36,7 +37,7 @@ class ExpenseCreate(BaseModel):
     payment_method: PaymentMethod = PaymentMethod.CASH
     reference_number: Optional[str] = None
     notes: Optional[str] = None
-    transaction_date: date
+    transaction_date: date = Field(default_factory=office_today)
 
 
 class FinancialTransactionResponse(BaseModel):

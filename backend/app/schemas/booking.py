@@ -157,6 +157,7 @@ class BookingCreate(BaseModel):
     supplier_id: Optional[int] = None
     supplier_name: Optional[str] = None
     notes: Optional[str] = None
+    use_credit_balance: bool = True
 
     # Exactly one of the detail models will be populated
     flight_details: Optional[FlightDetailCreate] = None
@@ -324,6 +325,7 @@ class BookingEmployeeResponse(BaseModel):
     # NOTE: cost_price is completely excluded here!
     selling_price: Decimal
     paid_amount: Decimal
+    credit_applied: Decimal = Decimal("0.00")
     remaining_amount: Decimal
     currency: str
     supplier_id: Optional[int] = None
@@ -363,6 +365,7 @@ class BookingAdminResponse(BaseModel):
     cost_price: Decimal  # Present ONLY for Admin and Accountant
     selling_price: Decimal
     paid_amount: Decimal
+    credit_applied: Decimal = Decimal("0.00")
     remaining_amount: Decimal
     currency: str
     supplier_id: Optional[int] = None

@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.accounting import (
     Account,
     AccountCurrency,
@@ -398,3 +399,228 @@ async def get_cash_balance_with_lock(
     total_debit, total_credit = bal_res.one()
     # Cash is ASSET: balance = debit - credit
     return (Decimal(str(total_debit)) - Decimal(str(total_credit))).quantize(Decimal("0.0001"))
+
+
+async def get_customer_available_credit(
+    session: AsyncSession,
+    customer_id: int,
+    currency: str,
+) -> Decimal:
+    """
+    يحسب الرصيد الدائن الفائض (غير المخصص لتذاكر مفتوحة) المتاح للعميل بعملة محددة:
+    available_credit = max(0, إجمالي المتبقي على التذاكر المفتوحة بهذه العملة - رصيد الأستاذ العام للعميل بهذه العملة)
+    """
+    from app.models.booking import Booking, BookingStatus
+
+    curr_upper = (currency or "YER").upper()
+    open_stmt = select(
+        func.coalesce(func.sum(Booking.remaining_amount), Decimal("0.00"))
+    ).where(
+        Booking.customer_id == customer_id,
+        Booking.currency == curr_upper,
+        Booking.status != BookingStatus.CANCELLED,
+    )
+    open_rem = Decimal(str((await session.execute(open_stmt)).scalar() or Decimal("0.00"))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    ledger_bal = await get_entity_balance(session, "customer", customer_id, curr_upper)
+    avail = (open_rem - ledger_bal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return avail if avail > Decimal("0.00") else Decimal("0.00")
+
+
+async def get_customers_credit_balances_map(
+    session: AsyncSession,
+    customer_ids: List[int],
+) -> Dict[int, Dict[str, float]]:
+    """
+    يحسب الأرصدة الدائنة المتاحة لمجموعة عملاء دفعة واحدة عبر استعلامين مجمعين فقط (منع N+1).
+    """
+    from app.models.booking import Booking, BookingStatus
+
+    if not customer_ids:
+        return {}
+
+    result_map: Dict[int, Dict[str, float]] = {
+        cid: {"YER": 0.0, "SAR": 0.0, "USD": 0.0} for cid in customer_ids
+    }
+
+    open_stmt = (
+        select(
+            Booking.customer_id,
+            Booking.currency,
+            func.coalesce(func.sum(Booking.remaining_amount), Decimal("0.00")),
+        )
+        .where(
+            Booking.customer_id.in_(customer_ids),
+            Booking.status != BookingStatus.CANCELLED,
+        )
+        .group_by(Booking.customer_id, Booking.currency)
+    )
+    open_rows = (await session.execute(open_stmt)).all()
+    open_map: Dict[tuple[int, str], Decimal] = {}
+    for cid, curr, rem_sum in open_rows:
+        curr_u = (curr or "YER").upper()
+        open_map[(cid, curr_u)] = Decimal(str(rem_sum or 0)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    ledger_stmt = (
+        select(
+            Account.entity_id,
+            Account.currency,
+            func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000")),
+            func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
+        )
+        .join(Account, JournalEntryLine.account_id == Account.id)
+        .where(
+            Account.entity_type == EntityAccountType.CUSTOMER,
+            Account.entity_id.in_(customer_ids),
+        )
+        .group_by(Account.entity_id, Account.currency)
+    )
+    ledger_rows = (await session.execute(ledger_stmt)).all()
+    ledger_map: Dict[tuple[int, str], Decimal] = {}
+    for cid, curr_enum, sum_d, sum_c in ledger_rows:
+        curr_u = curr_enum.value if hasattr(curr_enum, "value") else str(curr_enum)
+        ledger_map[(cid, curr_u)] = (Decimal(str(sum_d)) - Decimal(str(sum_c))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    for cid in customer_ids:
+        for curr in ("YER", "SAR", "USD"):
+            open_rem = open_map.get((cid, curr), Decimal("0.00"))
+            ledger_bal = ledger_map.get((cid, curr), Decimal("0.00"))
+            avail = (open_rem - ledger_bal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            result_map[cid][curr] = float(avail) if avail > Decimal("0.00") else 0.0
+
+    return result_map
+
+
+async def get_customer_all_credit_balances(
+    session: AsyncSession,
+    customer_id: int,
+) -> Dict[str, float]:
+    """يرجع الأرصدة الدائنة المتاحة للعميل في العملات الثلاث (YER, SAR, USD)."""
+    batch = await get_customers_credit_balances_map(session, [customer_id])
+    return batch.get(customer_id, {"YER": 0.0, "SAR": 0.0, "USD": 0.0})
+
+
+async def backfill_historical_bookings(session: AsyncSession) -> Dict[str, int]:
+    """
+    يسوّي القيود التاريخية للحجوزات القديمة (التي سُجل فيها صافي المتبقي فقط على حساب العميل)
+    عبر إضافة قيد تسوية صفري الأثر (BOOKING_BACKFILL) يثبت مبلغ الدفعة المقدمة (مديناً ودائناً)
+    على حساب العميل دون تعديل أو مسح أي سطر قيد مرحّل سابقاً، مع تقريب أرصدة التذاكر إلى خانتين.
+    """
+    from app.models.booking import Booking
+    from app.models.customer import Customer
+    from app.models.financial import FinancialTransaction, TransactionType
+
+    stmt = (
+        select(JournalEntry)
+        .where(JournalEntry.reference_type == "BOOKING")
+        .options(selectinload(JournalEntry.lines).selectinload(JournalEntryLine.account))
+    )
+    res = await session.execute(stmt)
+    booking_jes = res.scalars().all()
+
+    backfilled_count = 0
+    for je in booking_jes:
+        bf_number = f"JE-BF-{je.reference_id}"
+        exists_res = await session.execute(
+            select(JournalEntry.id).where(JournalEntry.entry_number == bf_number)
+        )
+        if exists_res.scalar_one_or_none():
+            continue
+
+        # الحجوزات القديمة التي دمجت الدفعة النقدية الأولية مباشرة في قيد الحجز على حساب الصندوق 1101
+        cash_lines = [
+            l
+            for l in je.lines
+            if l.account
+            and l.account.code.startswith("1101-")
+            and Decimal(str(l.debit)) > Decimal("0.0000")
+        ]
+        if not cash_lines:
+            continue
+
+        cash_debit = sum((Decimal(str(l.debit)) for l in cash_lines), Decimal("0.0000")).quantize(
+            Decimal("0.0001")
+        )
+        cash_debit_base = sum(
+            (Decimal(str(l.debit_base)) for l in cash_lines), Decimal("0.0000")
+        ).quantize(Decimal("0.0001"))
+        if cash_debit <= Decimal("0.0000"):
+            continue
+
+        b_res = await session.execute(
+            select(Booking).where(Booking.ticket_number == je.reference_id)
+        )
+        booking = b_res.scalar_one_or_none()
+        if not booking:
+            continue
+
+        cust = await session.get(Customer, booking.customer_id)
+        cust_name = cust.name if cust else f"Customer #{booking.customer_id}"
+        curr_str = je.currency.value if hasattr(je.currency, "value") else str(je.currency)
+        cust_acc = await get_entity_account(
+            session, "customer", booking.customer_id, curr_str, cust_name
+        )
+
+        rc_res = await session.execute(
+            select(FinancialTransaction.transaction_id)
+            .where(
+                FinancialTransaction.booking_id == booking.id,
+                FinancialTransaction.type == TransactionType.PAYMENT_IN,
+            )
+            .order_by(FinancialTransaction.id.asc())
+            .limit(1)
+        )
+        rc_ref = rc_res.scalar_one_or_none() or je.reference_id
+
+        bf_entry = JournalEntry(
+            entry_number=bf_number,
+            date=je.date,
+            reference_type="BOOKING_BACKFILL",
+            reference_id=je.reference_id,
+            currency=je.currency,
+            exchange_rate=je.exchange_rate,
+            description=f"قيد تسوية إثبات كامل قيمة الحجز {je.reference_id} والدفعة المقدمة ({rc_ref})",
+            is_posted=True,
+        )
+        session.add(bf_entry)
+        await session.flush()
+
+        session.add_all(
+            [
+                JournalEntryLine(
+                    journal_entry_id=bf_entry.id,
+                    account_id=cust_acc.id,
+                    debit=cash_debit,
+                    credit=Decimal("0.0000"),
+                    debit_base=cash_debit_base,
+                    credit_base=Decimal("0.0000"),
+                ),
+                JournalEntryLine(
+                    journal_entry_id=bf_entry.id,
+                    account_id=cust_acc.id,
+                    debit=Decimal("0.0000"),
+                    credit=cash_debit,
+                    debit_base=Decimal("0.0000"),
+                    credit_base=cash_debit_base,
+                ),
+            ]
+        )
+        backfilled_count += 1
+
+    all_b_res = await session.execute(select(Booking))
+    rounded_bookings = 0
+    for b in all_b_res.scalars().all():
+        p_2 = Decimal(str(b.paid_amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        r_2 = Decimal(str(b.remaining_amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if b.paid_amount != p_2 or b.remaining_amount != r_2:
+            b.paid_amount = p_2
+            b.remaining_amount = r_2
+            rounded_bookings += 1
+
+    await session.flush()
+    return {"backfilled_bookings": backfilled_count, "rounded_bookings": rounded_bookings}

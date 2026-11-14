@@ -3,7 +3,7 @@ Finance Routes — الترقية المعمارية الكاملة للمنظو
 يشمل: الورديات، تخصيص السداد المتعدد العملات، القيود العكسية، حماية التزامن
 """
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, require_accountant_or_admin
+from app.core.config import office_today, to_office_time
 from app.core.database import get_db
 from app.models.accounting import AccountCurrency
 from app.models.booking import Booking, BookingStatus
@@ -85,7 +86,7 @@ class ReceiptVoucherV2Create(BaseModel):
     payment_method: PaymentMethod = PaymentMethod.CASH
     reference_number: Optional[str] = None
     notes: Optional[str] = None
-    transaction_date: date = Field(default_factory=date.today)
+    transaction_date: date = Field(default_factory=office_today)
     # قائمة تخصيصات التذاكر (اختيارية — الفائض يبقى رصيد دائن)
     allocations: List[AllocationItem] = Field(default_factory=list)
 
@@ -114,7 +115,7 @@ async def open_cash_shift(
         "message": "تم فتح الوردية بنجاح",
         "shift_id": shift.id,
         "shift_number": shift.shift_number,
-        "started_at": shift.opened_at.isoformat(),
+        "started_at": to_office_time(shift.opened_at).isoformat(),
         "starting_balance": float(shift.starting_balance),
     }
 
@@ -154,7 +155,7 @@ async def get_active_shift_status(
         "shift": {
             "id": shift.id,
             "shift_number": shift.shift_number,
-            "opened_at": shift.opened_at.isoformat(),
+            "opened_at": to_office_time(shift.opened_at).isoformat(),
             "starting_balance": float(shift.starting_balance),
             "total_in": float(total_in),
             "total_out": float(total_out),
@@ -182,7 +183,7 @@ async def close_cash_shift(
         "ending_balance_system": float(shift.ending_balance_system),
         "ending_balance_actual": float(shift.ending_balance_actual),
         "difference": float(shift.difference),
-        "closed_at": shift.closed_at.isoformat(),
+        "closed_at": to_office_time(shift.closed_at).isoformat(),
     }
 
 
@@ -199,8 +200,8 @@ async def list_shifts(
     return [
         {
             "id": s.id, "shift_number": s.shift_number, "user_id": s.user_id,
-            "status": s.status.value, "opened_at": s.opened_at.isoformat(),
-            "closed_at": s.closed_at.isoformat() if s.closed_at else None,
+            "status": s.status.value, "opened_at": to_office_time(s.opened_at).isoformat(),
+            "closed_at": to_office_time(s.closed_at).isoformat() if s.closed_at else None,
             "starting_balance": float(s.starting_balance),
             "ending_balance_system": float(s.ending_balance_system) if s.ending_balance_system else None,
             "ending_balance_actual": float(s.ending_balance_actual) if s.ending_balance_actual else None,
@@ -363,47 +364,62 @@ async def create_receipt_voucher_v2(
     })
 
     total_credit_base = Decimal("0.0000")
+    alloc_desc_parts: List[str] = []
 
     for alloc_item in data.allocations:
         booking = (await db.execute(select(Booking).where(Booking.id == alloc_item.booking_id))).scalar_one_or_none()
         if not booking:
             raise HTTPException(status_code=404, detail=f"الحجز #{alloc_item.booking_id} غير موجود")
 
-        booking_currency = booking.currency
-        # سعر الصرف: عملة السند → عملة الحجز
-        rate = alloc_item.exchange_rate
-        allocated_in_booking_curr = (alloc_item.allocated_amount * rate).quantize(Decimal("0.0001"))
+        booking_currency = (booking.currency or "YER").upper()
+        # سعر الصرف: عملة السند → عملة الحجز (مع تقريب النتيجة إلى خانتين عشريتين P7)
+        rate = Decimal(str(alloc_item.exchange_rate))
+        alloc_amt_2d = Decimal(str(alloc_item.allocated_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        allocated_in_booking_curr = (alloc_amt_2d * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        rem_2d = Decimal(str(booking.remaining_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-        # التحقق من عدم تجاوز المتبقي
-        if allocated_in_booking_curr > booking.remaining_amount + Decimal("0.05"):
+        # التحقق من عدم تجاوز المتبقي (مع معالجة فروق أجزاء السنت <= 0.05)
+        if allocated_in_booking_curr > rem_2d + Decimal("0.05"):
             raise HTTPException(status_code=400,
                 detail=f"الحجز #{booking.ticket_number}: المبلغ المخصص ({allocated_in_booking_curr} {booking_currency}) "
-                       f"يتجاوز المتبقي ({booking.remaining_amount} {booking_currency})")
+                       f"يتجاوز المتبقي ({rem_2d} {booking_currency})")
+        if allocated_in_booking_curr > rem_2d:
+            allocated_in_booking_curr = rem_2d
 
-        # تحديث الحجز
-        booking.paid_amount = (Decimal(str(booking.paid_amount)) + allocated_in_booking_curr).quantize(Decimal("0.0001"))
-        booking.remaining_amount = max(
-            Decimal("0.0000"),
-            (Decimal(str(booking.remaining_amount)) - allocated_in_booking_curr).quantize(Decimal("0.0001"))
+        # تحديث الحجز بخانتين عشريتين
+        booking.paid_amount = (Decimal(str(booking.paid_amount)) + allocated_in_booking_curr).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        if booking.status == BookingStatus.PENDING and booking.paid_amount > 0:
+        booking.remaining_amount = max(
+            Decimal("0.00"),
+            (rem_2d - allocated_in_booking_curr).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        )
+        if booking.status == BookingStatus.PENDING and booking.paid_amount > Decimal("0.00"):
             booking.status = BookingStatus.CONFIRMED
 
         # تسجيل التخصيص
         alloc = VoucherAllocation(
             voucher_id=tx.id,
             booking_id=booking.id,
-            allocated_amount=alloc_item.allocated_amount,
+            allocated_amount=alloc_amt_2d,
             target_currency=AccountCurrency(booking_currency),
             exchange_rate=rate,
             allocated_in_booking_currency=allocated_in_booking_curr,
         )
         db.add(alloc)
 
+        if data.currency.upper() != booking_currency:
+            alloc_desc_parts.append(
+                f"حجز {booking.ticket_number}: {alloc_amt_2d} {data.currency.upper()} × {float(rate):g} = {allocated_in_booking_curr} {booking_currency}"
+            )
+        else:
+            alloc_desc_parts.append(
+                f"حجز {booking.ticket_number}: {allocated_in_booking_curr} {booking_currency}"
+            )
+
         # قيد دائن لحساب العميل بعملة الحجز
         cust_acc = await get_entity_account(db, "customer" if data.entity_type == EntityType.CUSTOMER else "supplier",
                                             data.entity_id, booking_currency, entity_name)
-        # debit_base and credit_base via FX
         booking_rate_to_yer = await get_exchange_rate_to_yer(db, booking_currency)
         credit_base = (allocated_in_booking_curr * booking_rate_to_yer).quantize(Decimal("0.0001"))
         total_credit_base += credit_base
@@ -415,9 +431,11 @@ async def create_receipt_voucher_v2(
             "credit_base": credit_base,
         })
 
-    # الفائض (تحت الحساب) يُقيَّد للحساب العام
-    unallocated = (data.total_amount - total_allocated).quantize(Decimal("0.0001"))
-    if unallocated > Decimal("0.0001"):
+    # الفائض (تحت الحساب) يُقيَّد للحساب العام بخانتين عشريتين
+    unallocated = (Decimal(str(data.total_amount)) - Decimal(str(total_allocated))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    if unallocated > Decimal("0.00"):
         general_cust_acc = await get_entity_account(
             db, "customer" if data.entity_type == EntityType.CUSTOMER else "supplier",
             data.entity_id, data.currency, entity_name)
@@ -430,12 +448,15 @@ async def create_receipt_voucher_v2(
             "debit_base": Decimal("0.0000"),
             "credit_base": unallocated_credit_base
         })
+        alloc_desc_parts.append(f"فائض دائن تحت الحساب: {unallocated} {data.currency.upper()}")
 
-    # Calculate FX Difference
+    # ترحيل فروق الصرف والتقريب تلقائياً لحسابي 4901-YER (أرباح) أو 5901-YER (فروقات/خسائر)
     fx_diff = (cash_debit_base - total_credit_base).quantize(Decimal("0.0001"))
-    if abs(fx_diff) > Decimal("0.0500"):
+    if abs(fx_diff) > Decimal("0.0000"):
         fx_local = (abs(fx_diff) / voucher_rate_to_yer).quantize(Decimal("0.0001"))
-        if fx_diff > 0:
+        if fx_local == Decimal("0.0000"):
+            fx_local = Decimal("0.0001")
+        if fx_diff > Decimal("0.0000"):
             fx_acc = await get_account_by_code(db, "4901-YER")
             je_lines.append({
                 "account_id": fx_acc.id,
@@ -456,10 +477,11 @@ async def create_receipt_voucher_v2(
 
     # ─── Create Balanced Journal Entry ───────────────────────────────────
     je_ref = await get_next_reference_number(db, "JE")
+    details_suffix = f" ({' | '.join(alloc_desc_parts)})" if alloc_desc_parts else ""
     await create_journal_entry(
         session=db, entry_number=je_ref, reference_type="RECEIPT",
         reference_id=ref_num, currency=data.currency,
-        description=f"سند قبض {ref_num} من {entity_name} - {len(data.allocations)} تخصيص(ات)",
+        description=f"سند قبض {ref_num} من {entity_name}{details_suffix}",
         lines_data=je_lines,
     )
 
@@ -660,20 +682,40 @@ async def void_voucher(
         if alloc.booking_id:
             booking = await db.get(Booking, alloc.booking_id)
             if booking:
-                amt = Decimal(str(alloc.allocated_in_booking_currency))
-                booking.paid_amount = max(Decimal("0.0000"), Decimal(str(booking.paid_amount)) - amt)
-                booking.remaining_amount = Decimal(str(booking.remaining_amount)) + amt
-                if booking.paid_amount == Decimal("0.0000") and booking.status == BookingStatus.CONFIRMED:
+                if booking.status == BookingStatus.CANCELLED:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="لا يمكن إلغاء سند مرتبط بحجز ملغي؛ تمت تسوية المبالغ ضمن قيد إلغاء الحجز",
+                    )
+                amt = Decimal(str(alloc.allocated_in_booking_currency)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                booking.paid_amount = max(
+                    Decimal("0.00"),
+                    (Decimal(str(booking.paid_amount)) - amt).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                )
+                booking.remaining_amount = (
+                    Decimal(str(booking.remaining_amount)) + amt
+                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if booking.paid_amount == Decimal("0.00") and booking.status == BookingStatus.CONFIRMED:
                     booking.status = BookingStatus.PENDING
 
     # If simple (no allocations) booking link
     if not voucher.allocations and voucher.booking_id:
         booking = await db.get(Booking, voucher.booking_id)
         if booking:
-            amt = Decimal(str(voucher.amount))
-            booking.paid_amount = max(Decimal("0.0000"), Decimal(str(booking.paid_amount)) - amt)
-            booking.remaining_amount = Decimal(str(booking.remaining_amount)) + amt
-            if booking.paid_amount == Decimal("0.0000") and booking.status == BookingStatus.CONFIRMED:
+            if booking.status == BookingStatus.CANCELLED:
+                raise HTTPException(
+                    status_code=400,
+                    detail="لا يمكن إلغاء سند مرتبط بحجز ملغي؛ تمت تسوية المبالغ ضمن قيد إلغاء الحجز",
+                )
+            amt = Decimal(str(voucher.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            booking.paid_amount = max(
+                Decimal("0.00"),
+                (Decimal(str(booking.paid_amount)) - amt).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            )
+            booking.remaining_amount = (
+                Decimal(str(booking.remaining_amount)) + amt
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if booking.paid_amount == Decimal("0.00") and booking.status == BookingStatus.CONFIRMED:
                 booking.status = BookingStatus.PENDING
 
     # ─── Find Original JE ───────────────────────────────────────────────
@@ -749,7 +791,7 @@ async def void_voucher(
         "message": f"تم إلغاء السند {voucher.transaction_id} بنجاح",
         "transaction_id": voucher.transaction_id,
         "reversal_je": rev_je_number,
-        "voided_at": voucher.voided_at.isoformat(),
+        "voided_at": to_office_time(voucher.voided_at).isoformat(),
     }
 
 

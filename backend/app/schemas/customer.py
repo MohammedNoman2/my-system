@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Dict, Optional
 from pydantic import BaseModel, EmailStr
 
 
@@ -33,6 +33,7 @@ class CustomerUpdate(BaseModel):
 class CustomerResponse(CustomerBase):
     id: int
     balance: Decimal
+    credit_balances: Optional[Dict[str, float]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -48,6 +49,7 @@ class CustomerSearchItem(BaseModel):
     id_number: Optional[str] = None
     nationality: Optional[str] = None
     balance: Decimal
+    credit_balances: Optional[Dict[str, float]] = None
 
     class Config:
         from_attributes = True

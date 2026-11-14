@@ -39,6 +39,7 @@ from app.services.accounting_service import (
     create_entity_accounts,
     create_journal_entry,
     get_account_by_code,
+    get_customer_available_credit,
     get_entity_account,
     get_entity_balance,
 )
@@ -231,12 +232,30 @@ async def create_booking(
         # Ensure entity sub-accounts exist
         await create_entity_accounts(db, "customer", customer.id, customer.name)
 
-    remaining_amount = data.selling_price - data.paid_amount
-    if remaining_amount < 0:
+    curr_str = (data.currency or "YER").upper()
+    selling_price_dec = Decimal(str(data.selling_price)).quantize(Decimal("0.01"))
+    cash_paid_dec = Decimal(str(data.paid_amount or 0)).quantize(Decimal("0.01"))
+
+    if cash_paid_dec > selling_price_dec:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="المبلغ المدفوع أكبر من سعر البيع",
         )
+
+    # P6: Check and consume available unapplied credit balance for customer in booking currency
+    avail_credit = Decimal("0.00")
+    if getattr(data, "use_credit_balance", True):
+        avail_credit = await get_customer_available_credit(db, customer.id, curr_str)
+
+    unpaid_after_cash = selling_price_dec - cash_paid_dec
+    credit_applied = min(avail_credit, unpaid_after_cash).quantize(Decimal("0.01"))
+    effective_paid_amount = (cash_paid_dec + credit_applied).quantize(Decimal("0.01"))
+    remaining_amount = (selling_price_dec - effective_paid_amount).quantize(Decimal("0.01"))
+
+    booking_notes = data.notes
+    if credit_applied > Decimal("0.00"):
+        credit_note = f"[تم خصم {credit_applied} {curr_str} من الرصيد الدائن المتاح للعميل]"
+        booking_notes = f"{booking_notes} | {credit_note}" if booking_notes else credit_note
 
     # Resolve Supplier (Support Manual Free-Text Entry with Ledger Account Auto-Creation)
     resolved_supplier_id = data.supplier_id
@@ -269,13 +288,14 @@ async def create_booking(
         customer_id=customer.id,
         employee_id=current_user.id,
         cost_price=cost_price,
-        selling_price=data.selling_price,
-        paid_amount=data.paid_amount,
+        selling_price=selling_price_dec,
+        paid_amount=effective_paid_amount,
+        credit_applied=credit_applied,
         remaining_amount=remaining_amount,
-        currency=data.currency,
+        currency=curr_str,
         supplier_id=resolved_supplier_id,
-        notes=data.notes,
-        status=BookingStatus.CONFIRMED if data.paid_amount > 0 else BookingStatus.PENDING,
+        notes=booking_notes,
+        status=BookingStatus.CONFIRMED if effective_paid_amount > Decimal("0.00") else BookingStatus.PENDING,
     )
     db.add(booking)
     await db.flush()
@@ -375,8 +395,7 @@ async def create_booking(
         )
         db.add(pld)
 
-    # 3. Generate balanced Double-Entry JournalEntry
-    curr_str = data.currency or "YER"
+    # 3. P5: Generate Full Accrual JournalEntry on Customer Account (full selling_price)
     je_ref = await get_next_reference_number(db, "JE")
 
     cash_acc = await get_account_by_code(db, f"1101-{curr_str}")
@@ -384,12 +403,9 @@ async def create_booking(
     sales_acc = await get_account_by_code(db, f"4101-{curr_str}")
 
     je_lines = [
-        {"account_id": sales_acc.id, "debit": Decimal("0.0000"), "credit": data.selling_price},
+        {"account_id": cust_acc.id, "debit": selling_price_dec, "credit": Decimal("0.0000")},
+        {"account_id": sales_acc.id, "debit": Decimal("0.0000"), "credit": selling_price_dec},
     ]
-    if data.paid_amount > 0:
-        je_lines.append({"account_id": cash_acc.id, "debit": data.paid_amount, "credit": Decimal("0.0000")})
-    if remaining_amount > 0:
-        je_lines.append({"account_id": cust_acc.id, "debit": remaining_amount, "credit": Decimal("0.0000")})
 
     if cost_price > 0 and resolved_supplier_id:
         cogs_acc = await get_account_by_code(db, f"5101-{curr_str}")
@@ -397,25 +413,22 @@ async def create_booking(
         je_lines.append({"account_id": cogs_acc.id, "debit": cost_price, "credit": Decimal("0.0000")})
         je_lines.append({"account_id": supp_acc.id, "debit": Decimal("0.0000"), "credit": cost_price})
 
+    accrual_desc = f"قيد حجز {ref_num} - {data.type.value} - العميل: {customer.name} (إجمالي القيمة: {selling_price_dec} {curr_str})"
+    if credit_applied > Decimal("0.00"):
+        accrual_desc += f" [شمل خصم رصيد دائن متاح: {credit_applied} {curr_str}]"
+
     await create_journal_entry(
         session=db,
         entry_number=je_ref,
         reference_type="BOOKING",
         reference_id=ref_num,
         currency=curr_str,
-        description=f"قيد حجز {ref_num} - {data.type.value} - العميل: {customer.name}",
+        description=accrual_desc,
         lines_data=je_lines,
     )
 
-    # Sync dynamic balance (unified base currency across all sub-accounts)
-    customer.balance = await get_entity_balance(db, "customer", customer.id)
-    if resolved_supplier_id:
-        supp_obj = await db.get(Supplier, resolved_supplier_id)
-        if supp_obj:
-            supp_obj.balance = await get_entity_balance(db, "supplier", supp_obj.id)
-
-    # If paid_amount > 0, record receipt voucher and link to active cash shift
-    if data.paid_amount > 0:
+    # 4. P5: If cash_paid_dec > 0, record receipt voucher AND its dedicated RECEIPT JournalEntry
+    if cash_paid_dec > Decimal("0.00"):
         active_shift = await get_active_shift(db, current_user.id, raise_if_none=False)
         rc_ref = await get_next_reference_number(db, "RC")
         payment_record = FinancialTransaction(
@@ -423,16 +436,38 @@ async def create_booking(
             type=TransactionType.PAYMENT_IN,
             entity_type=EntityType.CUSTOMER,
             entity_id=customer.id,
-            amount=data.paid_amount,
-            currency=data.currency,
+            amount=cash_paid_dec,
+            currency=curr_str,
             payment_method=PaymentMethod.CASH,
-            notes=f"دفعة حجز {ref_num}",
+            notes=f"دفعة مقدمة لحجز {ref_num}",
             transaction_date=office_today(),
             booking_id=booking.id,
             created_by=current_user.id,
             shift_id=active_shift.id if active_shift else None,
         )
         db.add(payment_record)
+        await db.flush()
+
+        rc_je_ref = await get_next_reference_number(db, "JE")
+        await create_journal_entry(
+            session=db,
+            entry_number=rc_je_ref,
+            reference_type="RECEIPT",
+            reference_id=rc_ref,
+            currency=curr_str,
+            description=f"سند قبض دفعة مقدمة {rc_ref} لحجز {ref_num} - العميل: {customer.name}",
+            lines_data=[
+                {"account_id": cash_acc.id, "debit": cash_paid_dec, "credit": Decimal("0.0000")},
+                {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": cash_paid_dec},
+            ],
+        )
+
+    # Sync dynamic balance (unified base currency across all sub-accounts)
+    customer.balance = await get_entity_balance(db, "customer", customer.id)
+    if resolved_supplier_id:
+        supp_obj = await db.get(Supplier, resolved_supplier_id)
+        if supp_obj:
+            supp_obj.balance = await get_entity_balance(db, "supplier", supp_obj.id)
 
     await log_audit_event(
         db,
@@ -852,15 +887,21 @@ async def cancel_booking(
     if booking.status == BookingStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="الحجز ملغي مسبقاً")
 
-    if data.refund_amount > booking.paid_amount:
+    credit_applied_amt = Decimal(str(getattr(booking, "credit_applied", None) or 0)).quantize(Decimal("0.01"))
+    cash_paid_amt = max(
+        Decimal("0.00"),
+        (Decimal(str(booking.paid_amount)) - credit_applied_amt).quantize(Decimal("0.01")),
+    )
+
+    if data.refund_amount > cash_paid_amt:
         raise HTTPException(
             status_code=400,
-            detail=f"المبلغ المسترد ({data.refund_amount}) لا يمكن أن يتجاوز المبلغ المدفوع ({booking.paid_amount})",
+            detail=f"المبلغ المسترد نقداً ({data.refund_amount}) لا يمكن أن يتجاوز المبلغ المدفوع نقداً ({cash_paid_amt})",
         )
 
     now = datetime.now(timezone.utc)
     old_data = {"status": booking.status.value, "paid": float(booking.paid_amount)}
-    orig_remaining = booking.remaining_amount
+    orig_remaining = Decimal(str(booking.remaining_amount)).quantize(Decimal("0.01"))
 
     booking.status = BookingStatus.CANCELLED
     booking.cancelled_at = now
@@ -885,10 +926,11 @@ async def cancel_booking(
         {"account_id": sales_acc.id, "debit": booking.selling_price, "credit": Decimal("0.0000")},
     ]
 
-    # Credit Customer AR for remaining debt being cancelled
-    if orig_remaining > 0:
+    # Credit Customer AR for remaining debt being cancelled PLUS any credit_applied consumed at booking creation
+    cust_credit_reversal = (orig_remaining + credit_applied_amt).quantize(Decimal("0.01"))
+    if cust_credit_reversal > Decimal("0.00"):
         cancel_lines.append(
-            {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": orig_remaining}
+            {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": cust_credit_reversal}
         )
 
     # Credit Cash for the refund paid back to the customer
@@ -897,9 +939,9 @@ async def cancel_booking(
             {"account_id": cash_acc.id, "debit": Decimal("0.0000"), "credit": data.refund_amount}
         )
 
-    # The office retains penalty = paid_amount - refund_amount -> Credit Cancellation Fee Revenue
-    retained_penalty = booking.paid_amount - data.refund_amount
-    if retained_penalty > 0:
+    # The office retains penalty from the cash portion = cash_paid_amt - refund_amount -> Credit Cancellation Fee Revenue
+    retained_penalty = (cash_paid_amt - Decimal(str(data.refund_amount))).quantize(Decimal("0.01"))
+    if retained_penalty > Decimal("0.00"):
         cancel_lines.append(
             {"account_id": cancel_fee_acc.id, "debit": Decimal("0.0000"), "credit": retained_penalty}
         )

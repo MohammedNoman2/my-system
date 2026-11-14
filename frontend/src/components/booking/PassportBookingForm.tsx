@@ -121,6 +121,7 @@ export function PassportBookingForm({ onSuccess, onCancel }: PassportBookingForm
         supplier_name: (values as any).supplier_name || null,
         ...(isEmployee ? {} : { cost_price: values.cost_price || 0 }),
         notes: values.notes || null,
+        use_credit_balance: (values as any).use_credit_balance ?? true,
         passport_details: {
           passport_type: values.passport_type,
           priority: values.priority,
@@ -266,7 +267,7 @@ export function PassportBookingForm({ onSuccess, onCancel }: PassportBookingForm
         {/* Step 3: Financials */}
         {currentStep === 3 && (
           <div className="animate-in fade-in duration-200">
-            <BookingFinancialStep form={form as any} />
+            <BookingFinancialStep form={form as any} selectedCustomer={selectedCustomer} />
           </div>
         )}
 

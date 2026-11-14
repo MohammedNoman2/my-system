@@ -13,7 +13,11 @@ from app.schemas.customer import (
     CustomerUpdate,
 )
 from app.utils.audit import log_audit_event
-from app.services.accounting_service import create_entity_accounts
+from app.services.accounting_service import (
+    create_entity_accounts,
+    get_customer_all_credit_balances,
+    get_customers_credit_balances_map,
+)
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
@@ -43,7 +47,14 @@ async def search_customers(
         .limit(limit)
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    customers = res.scalars().all()
+    credit_map = await get_customers_credit_balances_map(db, [c.id for c in customers])
+    items: List[CustomerSearchItem] = []
+    for c in customers:
+        item = CustomerSearchItem.model_validate(c)
+        item.credit_balances = credit_map.get(c.id, {"YER": 0.0, "SAR": 0.0, "USD": 0.0})
+        items.append(item)
+    return items
 
 
 @router.get("/", response_model=List[CustomerResponse])
@@ -139,7 +150,9 @@ async def get_customer(
     customer = await db.get(Customer, id)
     if not customer:
         raise HTTPException(status_code=404, detail="العميل غير موجود")
-    return customer
+    resp = CustomerResponse.model_validate(customer)
+    resp.credit_balances = await get_customer_all_credit_balances(db, customer.id)
+    return resp
 
 
 @router.put("/{id}", response_model=CustomerResponse)
