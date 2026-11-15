@@ -94,6 +94,7 @@ ALLOWED_LOGO_MIMES = {
     "image/jpg": "jpg",
     "image/webp": "webp",
 }
+STATIC_UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "uploads"
 
 
 def _detect_image_format(raw: bytes) -> Optional[tuple[str, str]]:
@@ -159,9 +160,8 @@ async def upload_logo(
     mime_type, safe_ext = detected
     s.logo_data = f"data:{mime_type};base64,{base64.b64encode(content).decode('utf-8')}"
 
-    static_dir = Path(__file__).resolve().parent.parent.parent / "static" / "uploads"
-    static_dir.mkdir(parents=True, exist_ok=True)
-    logo_path = static_dir / f"logo.{safe_ext}"
+    STATIC_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    logo_path = STATIC_UPLOADS_DIR / f"logo.{safe_ext}"
     with open(logo_path, "wb") as f:
         f.write(content)
     s.logo_image_url = f"/static/uploads/logo.{safe_ext}"
