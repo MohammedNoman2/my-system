@@ -1,3 +1,4 @@
+import hmac
 from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -28,7 +29,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         if request.method not in SAFE_METHODS and normalized_path not in exempt_normalized:
             header_csrf = request.headers.get("X-CSRF-Token")
-            if not header_csrf or not cookie_csrf or header_csrf != cookie_csrf:
+            if (
+                not header_csrf
+                or not cookie_csrf
+                or not hmac.compare_digest(
+                    header_csrf.encode("utf-8", errors="ignore"),
+                    cookie_csrf.encode("utf-8", errors="ignore"),
+                )
+            ):
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "فشل التحقق من أمان CSRF (رمز الحماية غير متطابق أو مفقود)"},

@@ -6,3 +6,4 @@ export * from './Modal';
 export * from './Toast';
 export * from './Spinner';
 export * from './EmptyState';
+export * from './ErrorBoundary';

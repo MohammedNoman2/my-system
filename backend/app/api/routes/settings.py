@@ -87,6 +87,26 @@ async def update_office_settings(
     return s
 
 
+MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
+ALLOWED_LOGO_MIMES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+}
+
+
+def _detect_image_format(raw: bytes) -> Optional[tuple[str, str]]:
+    """يتحقق من التوقيع الثنائي الفعلي (Magic Bytes) للصورة ويعيد (mime_type, ext)."""
+    if len(raw) >= 8 and raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ("image/png", "png")
+    if len(raw) >= 3 and raw.startswith(b"\xff\xd8\xff"):
+        return ("image/jpeg", "jpg")
+    if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return ("image/webp", "webp")
+    return None
+
+
 @router.post("/logo", response_model=SettingsResponse)
 async def upload_logo(
     request: Request,
@@ -95,7 +115,7 @@ async def upload_logo(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Upload and synchronize office logo. Supports multipart file upload OR JSON base64 data.
+    رفع وتحديث شعار المكتب مع فحص الحجم الأقصى (2MB) والتوقيع الثنائي للصورة (PNG/JPG/WEBP).
     """
     res = await db.execute(select(Settings).limit(1))
     s = res.scalar_one_or_none()
@@ -103,31 +123,48 @@ async def upload_logo(
         s = Settings()
         db.add(s)
 
-    # Check if multipart file uploaded
+    content: Optional[bytes] = None
     if file:
         content = await file.read()
-        mime_type = file.content_type or "image/png"
-        b64_str = f"data:{mime_type};base64,{base64.b64encode(content).decode('utf-8')}"
-        s.logo_data = b64_str
-        
-        # Also persist to static dir if available
-        static_dir = Path(__file__).resolve().parent.parent.parent / "static" / "uploads"
-        static_dir.mkdir(parents=True, exist_ok=True)
-        ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "png"
-        logo_path = static_dir / f"logo.{ext}"
-        with open(logo_path, "wb") as f:
-            f.write(content)
-        s.logo_image_url = f"/static/uploads/logo.{ext}"
+        if not content:
+            raise HTTPException(status_code=400, detail="ملف الشعار المرفوع فارغ")
+        if len(content) > MAX_LOGO_BYTES:
+            raise HTTPException(status_code=400, detail="حجم الشعار يتجاوز الحد الأقصى المسموح (2 ميجابايت)")
+        if file.content_type and file.content_type.lower() not in ALLOWED_LOGO_MIMES:
+            raise HTTPException(status_code=400, detail="صيغة الملف غير مدعومة؛ يُسمح فقط بـ PNG أو JPG أو WEBP")
     else:
-        # Check if JSON payload was sent with logo_data
         try:
             body = await request.json()
-            if "logo_data" in body:
-                s.logo_data = body["logo_data"]
-            if "logo_image_url" in body:
-                s.logo_image_url = body["logo_image_url"]
         except Exception:
-            raise HTTPException(status_code=400, detail="يجب إرفاق ملف صورة أو إرسال logo_data")
+            raise HTTPException(status_code=400, detail="يجب إرفاق ملف صورة صالح أو إرسال logo_data")
+
+        raw_data_uri = str(body.get("logo_data") or "").strip()
+        if not raw_data_uri or not raw_data_uri.startswith("data:image/"):
+            raise HTTPException(status_code=400, detail="بيانات الشعار غير صالحة؛ يجب أن تكون بصيغة صورة Base64")
+        try:
+            _, b64_part = raw_data_uri.split(",", 1)
+            content = base64.b64decode(b64_part, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="فشل فك ترميز صورة الشعار المرسلة")
+        if len(content) > MAX_LOGO_BYTES:
+            raise HTTPException(status_code=400, detail="حجم الشعار يتجاوز الحد الأقصى المسموح (2 ميجابايت)")
+
+    detected = _detect_image_format(content)
+    if not detected:
+        raise HTTPException(
+            status_code=400,
+            detail="محتوى الملف ليس صورة صالحة (يُسمح فقط بملفات PNG وJPEG وWEBP الحقيقية)",
+        )
+
+    mime_type, safe_ext = detected
+    s.logo_data = f"data:{mime_type};base64,{base64.b64encode(content).decode('utf-8')}"
+
+    static_dir = Path(__file__).resolve().parent.parent.parent / "static" / "uploads"
+    static_dir.mkdir(parents=True, exist_ok=True)
+    logo_path = static_dir / f"logo.{safe_ext}"
+    with open(logo_path, "wb") as f:
+        f.write(content)
+    s.logo_image_url = f"/static/uploads/logo.{safe_ext}"
 
     await log_audit_event(
         db,
@@ -135,7 +172,7 @@ async def upload_logo(
         "settings",
         user=current_user,
         record_id=s.id,
-        new_data={"action": "upload_logo"},
+        new_data={"action": "upload_logo", "format": safe_ext, "size_bytes": len(content)},
         request=request,
     )
     await db.commit()

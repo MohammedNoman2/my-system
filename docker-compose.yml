@@ -4,15 +4,13 @@ services:
     container_name: arp_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: arp_user
-      POSTGRES_PASSWORD: arp_password_secure_2026
-      POSTGRES_DB: arp_db
+      POSTGRES_USER: ${POSTGRES_USER:-arp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-arp_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U arp_user -d arp_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arp_user} -d ${POSTGRES_DB:-arp_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,8 +19,6 @@ services:
     image: redis:7-alpine
     container_name: arp_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
 
   backend:
     build:
@@ -36,18 +32,18 @@ services:
       redis:
         condition: service_started
     environment:
-      - DATABASE_URL=postgresql+asyncpg://arp_user:arp_password_secure_2026@postgres:5432/arp_db
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arp_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-arp_db}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - SECRET_KEY=arp-production-ultra-secret-key-2026-deployment
-      - CSRF_SECRET_KEY=arp-csrf-secret-2026
-      - FRONTEND_URL=http://localhost
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - CSRF_SECRET_KEY=${CSRF_SECRET_KEY:?CSRF_SECRET_KEY must be set in .env}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
       - UPLOAD_DIR=/app/uploads
     volumes:
       - backend_uploads:/app/uploads
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   frontend:
     build:

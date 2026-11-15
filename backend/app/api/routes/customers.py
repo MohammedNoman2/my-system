@@ -60,7 +60,7 @@ async def search_customers(
 @router.get("/", response_model=List[CustomerResponse])
 async def list_customers(
     search: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

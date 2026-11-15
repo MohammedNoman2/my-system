@@ -9,4 +9,8 @@ arp.db
 backend/db_out*.txt
 db_out*.txt
 *.bak
+.env
+backend/.env
+backend/static/uploads/
+uploads/
 

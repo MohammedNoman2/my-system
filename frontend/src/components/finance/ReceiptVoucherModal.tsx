@@ -42,6 +42,11 @@ export function ReceiptVoucherModal({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [unpaidBookings, setUnpaidBookings] = useState<any[]>([]);
+  const [ratesToYer, setRatesToYer] = useState<Record<string, number>>({
+    YER: 1,
+    SAR: 140,
+    USD: 530,
+  });
   const [isLoading, setIsLoading] = useState(false);
   const addToast = useUIStore((state) => state.addToast);
 
@@ -72,20 +77,31 @@ export function ReceiptVoucherModal({
   }, [initialCustomerId, setValue]);
 
   useEffect(() => {
-    async function loadEntities() {
+    async function loadEntitiesAndRates() {
       try {
-        const [cRes, sRes] = await Promise.all([
-          api.get('/customers/?limit=100'),
-          api.get('/suppliers/?limit=100'),
+        const [cRes, sRes, rRes] = await Promise.all([
+          api.get('/customers/?limit=1000'),
+          api.get('/suppliers/?limit=1000'),
+          api.get('/settings/exchange-rates').catch(() => ({ data: [] })),
         ]);
-        setCustomers(cRes.data);
-        setSuppliers(sRes.data);
+        setCustomers(cRes.data || []);
+        setSuppliers(sRes.data || []);
+
+        const rateMap: Record<string, number> = { YER: 1, SAR: 140, USD: 530 };
+        if (Array.isArray(rRes.data)) {
+          for (const item of rRes.data) {
+            if (item.to_currency === 'YER' && Number(item.rate) > 0) {
+              rateMap[String(item.from_currency).toUpperCase()] = Number(item.rate);
+            }
+          }
+        }
+        setRatesToYer(rateMap);
       } catch (err) {
         console.error('Failed to load entities', err);
       }
     }
     if (isOpen) {
-      loadEntities();
+      loadEntitiesAndRates();
     }
   }, [isOpen]);
 
@@ -110,17 +126,20 @@ export function ReceiptVoucherModal({
 
   const selectedBooking = unpaidBookings.find(b => b.id === selectedBookingId);
   const isCrossCurrency = selectedBooking && selectedBooking.currency !== receiptCurrency;
-  
-  // Update exchange rate defaults dynamically based on common currency pairs
+
+  // حساب سعر الصرف الافتراضي ديناميكياً من أسعار الصرف المعتمدة في الإعدادات (كم وحدة من عملة السند مقابل 1 من عملة التذكرة)
   useEffect(() => {
-    if (isCrossCurrency) {
-      if (receiptCurrency === 'YER' && selectedBooking.currency === 'SAR') setValue('exchange_rate', 265);
-      if (receiptCurrency === 'YER' && selectedBooking.currency === 'USD') setValue('exchange_rate', 530);
-      if (receiptCurrency === 'SAR' && selectedBooking.currency === 'YER') setValue('exchange_rate', 0.00377);
+    if (isCrossCurrency && selectedBooking) {
+      const targetCurr = String(selectedBooking.currency || 'YER').toUpperCase();
+      const voucherCurr = String(receiptCurrency || 'YER').toUpperCase();
+      const targetInYer = ratesToYer[targetCurr] || 1;
+      const voucherInYer = ratesToYer[voucherCurr] || 1;
+      const computedUiRate = Number((targetInYer / voucherInYer).toFixed(4));
+      setValue('exchange_rate', computedUiRate > 0 ? computedUiRate : 1);
     } else {
       setValue('exchange_rate', 1);
     }
-  }, [receiptCurrency, selectedBooking?.currency, isCrossCurrency, setValue]);
+  }, [receiptCurrency, selectedBooking?.currency, isCrossCurrency, ratesToYer, setValue]);
 
   const allocatedInBookingCurrency = isCrossCurrency ? amount / exchangeRate : amount;
 

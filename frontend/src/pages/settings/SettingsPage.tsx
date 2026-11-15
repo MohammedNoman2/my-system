@@ -311,12 +311,12 @@ export function SettingsPage() {
                   <p className="text-xs text-slate-500 max-w-xl">
                     يتم تضمين الشعار تلقائياً في واجهة الدخول، الشريط الجانبي للنظام، وسندات الحجز المطبوعة (A4 والحراري) بإطار عالي التباين ووضوح فائق.
                   </p>
-                  <div className="pt-2">
+                  <div className="pt-2 space-y-1.5">
                     <input
                       type="file"
                       ref={logoInputRef}
                       onChange={handleLogoChange}
-                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                      accept="image/png,image/jpeg,image/webp"
                       className="hidden"
                     />
                     <Button
@@ -329,6 +329,9 @@ export function SettingsPage() {
                     >
                       رفع وتحديث الشعار
                     </Button>
+                    <p className="text-[11px] text-slate-400">
+                      الصيغ المسموحة: PNG, JPG, WEBP فقط (بحد أقصى 2 ميجابايت)
+                    </p>
                   </div>
                 </div>
               </div>

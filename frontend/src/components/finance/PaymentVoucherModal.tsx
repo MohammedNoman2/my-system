@@ -66,8 +66,8 @@ export function PaymentVoucherModal({
     async function loadEntities() {
       try {
         const [cRes, sRes] = await Promise.all([
-          api.get('/customers/?limit=100'),
-          api.get('/suppliers/?limit=100'),
+          api.get('/customers/?limit=1000'),
+          api.get('/suppliers/?limit=1000'),
         ]);
         setCustomers(cRes.data);
         setSuppliers(sRes.data);
