@@ -89,9 +89,12 @@
 - **ربط أسعار الصرف ديناميكياً وتوسيع قوائم الاختيار**: جلب أسعار الصرف الحية من `/settings/exchange-rates` في `ReceiptVoucherModal.tsx` لحساب جميع أزواج العملات تلقائياً، ورفع سقف استعلام العملاء والموردين من `100`/`200` إلى `1000`/`2000`.
 - **إضافة حاجز الأخطاء العام (`ErrorBoundary.tsx`)**: تغليف تطبيق الواجهة الأمامية في `App.tsx` بمكون `ErrorBoundary` باللغة العربية لمنع الشاشة البيضاء عند أي خطأ عرض غير متوقع.
 
+- **عزل مسار اختبار الشعار واستعادة الشعار الرسمي (`a2d3fe6`)**: تعريف `STATIC_UPLOADS_DIR` في `settings.py` وعزله عبر `tempfile.TemporaryDirectory()` داخل `verify_stage_4d.py`، واستعادة شعار المكتب الأصلي `backend/app/static/uploads/logo.png` بحجمه الكامل (`324,985 بايت`)، وإلغاء تتبع `tsconfig.tsbuildinfo` في `.gitignore`.
+- **مزامنة الوثيقة الهندسية الشاملة (`ARP_COMPLETE_SYSTEM_MANUAL.md`)**: تحديث الوثيقة المرجعية إلى الإصدار الموحّد `3.2` لتشمل كافة التغييرات المعمارية والمحاسبية والأمنية المنجزة في الدفعات الأربع (`4-A` إلى `4-D`).
+
 ## Current Project Status (الحالة المعتمدة بعد إتمام الدفعات الأربع 4-A إلى 4-D)
-- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`.
-- **بوابات التحقق الآلي**: اجتياز `verify_stage_4a.py`، `verify_stage_4b.py`، `verify_stage_4c.py`، و`verify_stage_4d.py` بنسبة 100%، وثبات المسارات الـ 53، وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`tsc -b && vite build`).
+- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D` (بما فيها الإصلاح التكميلي `a2d3fe6` وتحديث `ARP_COMPLETE_SYSTEM_MANUAL.md`).
+- **بوابات التحقق الآلي**: اجتياز `verify_stage_4a.py`، `verify_stage_4b.py`، `verify_stage_4c.py`، و`verify_stage_4d.py` بنسبة 100%، وثبات المسارات الـ 53، وثبات شعار المكتب الأصلي (`324,985 بايت`)، وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`tsc -b && vite build`).
 
 
 
