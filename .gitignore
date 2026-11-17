@@ -14,5 +14,7 @@ backend/.env
 backend/app/static/uploads/*
 !backend/app/static/uploads/logo.png
 uploads/
+backend/backups/
 *.tsbuildinfo
+.pytest_cache/
 

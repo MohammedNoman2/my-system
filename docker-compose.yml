@@ -32,16 +32,19 @@ services:
       redis:
         condition: service_started
     environment:
+      - ENVIRONMENT=production
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arp_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-arp_db}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - CSRF_SECRET_KEY=${CSRF_SECRET_KEY:?CSRF_SECRET_KEY must be set in .env}
+      - PASSWORD_RESET_SECRET=${PASSWORD_RESET_SECRET:?PASSWORD_RESET_SECRET must be set in .env}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
       - UPLOAD_DIR=/app/uploads
     volumes:
       - backend_uploads:/app/uploads
+      - backend_backups:/app/backups
     ports:
       - "127.0.0.1:8000:8000"
 
@@ -59,3 +62,4 @@ services:
 volumes:
   postgres_data:
   backend_uploads:
+  backend_backups:

@@ -92,9 +92,16 @@
 - **عزل مسار اختبار الشعار واستعادة الشعار الرسمي (`a2d3fe6`)**: تعريف `STATIC_UPLOADS_DIR` في `settings.py` وعزله عبر `tempfile.TemporaryDirectory()` داخل `verify_stage_4d.py`، واستعادة شعار المكتب الأصلي `backend/app/static/uploads/logo.png` بحجمه الكامل (`324,985 بايت`)، وإلغاء تتبع `tsconfig.tsbuildinfo` في `.gitignore`.
 - **مزامنة الوثيقة الهندسية الشاملة (`ARP_COMPLETE_SYSTEM_MANUAL.md`)**: تحديث الوثيقة المرجعية إلى الإصدار الموحّد `3.2` لتشمل كافة التغييرات المعمارية والمحاسبية والأمنية المنجزة في الدفعات الأربع (`4-A` إلى `4-D`).
 
-## Current Project Status (الحالة المعتمدة بعد إتمام الدفعات الأربع 4-A إلى 4-D)
-- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D` (بما فيها الإصلاح التكميلي `a2d3fe6` وتحديث `ARP_COMPLETE_SYSTEM_MANUAL.md`).
-- **بوابات التحقق الآلي**: اجتياز `verify_stage_4a.py`، `verify_stage_4b.py`، `verify_stage_4c.py`، و`verify_stage_4d.py` بنسبة 100%، وثبات المسارات الـ 53، وثبات شعار المكتب الأصلي (`324,985 بايت`)، وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`tsc -b && vite build`).
+## Stage 5-A1 Completed: Official Alembic Migrations, Dual-Engine Verified Backup, Production Secret Guard, and Unified Pytest + CI (الدفعة الجراحية 5-A1)
+- **ترحيل Alembic الرسمي لمخطط المرحلة الرابعة (`b7c8d9e0f1a2`)**: إنشاء ملف الترحيل الرسمي `b7c8d9e0f1a2_stage4_schema_sync.py` يدعم التعديل الآمن عبر `batch_alter_table` للتوافق مع SQLite وPostgreSQL، مع تحديث `alembic/env.py` للسماح بحقن روابط قواعد البيانات المؤقتة في الاختبارات، وتطبيق الترحيل على قاعدة البيانات بنجاح (`b7c8d9e0f1a2 (head)`).
+- **خدمة النسخ الاحتياطي والتحقق من الاستعادة للبيئتين (`backup_service.py`)**: إنشاء خدمة نسخ احتياطي تدعم `sqlite3.backup()` و `pg_dump` مع ضغط `gzip`، وفحص سلامة النسخ آلياً عبر `PRAGMA integrity_check` وعدّ الجداول والسجلات، وحفظ النسخ في وحدة تخزين دائمة `backend/backups/` (`backend_backups` في Docker) مع مسارات إدارة للمدير غير حاجبة للخادم عبر `run_in_threadpool` في `settings.py` وسكربت مستقل `backup_db.py`.
+- **تحصين وتثبيت حزم عميل PostgreSQL في Docker**: تحديث `backend/Dockerfile` لتثبيت `postgresql-client-16` من المستودع الرسمي لضمان تشغيل `pg_dump`، وتحديث `docker-compose.yml` لإلزامية `ENVIRONMENT=production` و `PASSWORD_RESET_SECRET`.
+- **حارس مفاتيح الإنتاج (`config.py`)**: إضافة مدقق `validate_production_secrets` لمنع تشغيل النظام نهائياً في وضع الإنتاج بالمفاتيح الافتراضية أو التي يقل طولها عن 24 حرفاً.
+- **حزمة الاختبارات الموحدة والتكامل المستمر (`pytest` + `CI`)**: عزل حزم الاختبار في `requirements-dev.txt` وإعداد `pytest.ini` وملف الاختبار الموحد `test_stage4_and_5a1_suite.py` الذي يغطي كافة المراحل وسلامة النسخ الاحتياطي وحارس المفاتيح، مع إنشاء سير العمل `.github/workflows/ci.yml` لتشغيل الفحوصات آلياً عند كل إيداع.
+
+## Current Project Status (الحالة المعتمدة بعد إتمام الدفعة 5-A1)
+- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`, `Stage 5-A1`.
+- **بوابات التحقق الآلي**: اجتياز حزمة `pytest` الموحدة (7 اختبارات شاملة) بنسبة 100%، وتطبيق ترحيل Alembic بنجاح (`b7c8d9e0f1a2`), ونمو مسارات النظام المحمية إلى 56 مساراً دون أي نقص، وثبات الشعار الأصلي (`324,985 بايت`)، وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية.
 
 
 

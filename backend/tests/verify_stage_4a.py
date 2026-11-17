@@ -34,17 +34,18 @@ def _dummy_request() -> Request:
 
 
 async def run_functional_tests():
-    # 1. Check live SQLite index in backend/arp.db (verify by name and across all unique indexes)
+    # 1. Check SQLite index in backend/arp.db if present (in CI, arp.db is gitignored so check schema in-memory below)
     db_path = Path(__file__).resolve().parent.parent / "arp.db"
-    conn = sqlite3.connect(str(db_path))
-    idxs = conn.execute("PRAGMA index_list(customers)").fetchall()
-    for r in idxs:
-        if r[2] == 1:
-            cols = [c[2] for c in conn.execute(f"PRAGMA index_info('{r[1]}')").fetchall()]
-            assert "phone_number" not in cols, f"Unique index still covers phone_number: {r[1]}"
-    conn.close()
-    phone_idx = [r for r in idxs if r[1] == "ix_customers_phone_number"]
-    assert phone_idx and phone_idx[0][2] == 0, f"Phone index is still unique: {phone_idx}"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        idxs = conn.execute("PRAGMA index_list(customers)").fetchall()
+        for r in idxs:
+            if r[2] == 1:
+                cols = [c[2] for c in conn.execute(f"PRAGMA index_info('{r[1]}')").fetchall()]
+                assert "phone_number" not in cols, f"Unique index still covers phone_number: {r[1]}"
+        conn.close()
+        phone_idx = [r for r in idxs if r[1] == "ix_customers_phone_number"]
+        assert phone_idx and phone_idx[0][2] == 0, f"Phone index is still unique: {phone_idx}"
 
     # 2. Check phone normalization (+967 -> 9 digits) and 8-digit / dummy doc rejection
     assert validate_clean_phone("+967 771 609 217") == "771609217"

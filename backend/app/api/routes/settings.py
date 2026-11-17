@@ -411,3 +411,54 @@ async def list_audit_logs(
         }
         for log, username, full_name in rows
     ]
+
+
+@router.post("/backup")
+async def trigger_database_backup(
+    request: Request,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """إنشاء نسخة احتياطية مضغوطة ومتحقق من استعادتها لقاعدة البيانات (للمدير فقط)."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.backup_service import create_database_backup
+
+    info = await run_in_threadpool(create_database_backup)
+    await log_audit_event(
+        db,
+        "INSERT",
+        "backups",
+        user=current_user,
+        new_data={"filename": info["filename"], "size_bytes": info["size_bytes"]},
+        request=request,
+    )
+    await db.commit()
+    return info
+
+
+@router.get("/backups")
+async def get_database_backups(
+    current_user: User = Depends(require_admin),
+):
+    """عرض قائمة النسخ الاحتياطية المتوفرة (للمدير فقط)."""
+    from app.services.backup_service import list_backups
+
+    return list_backups()
+
+
+@router.get("/backups/{filename}/download")
+async def download_database_backup(
+    filename: str,
+    current_user: User = Depends(require_admin),
+):
+    """تنزيل ملف نسخة احتياطية محدد بأمان (للمدير فقط)."""
+    from fastapi.responses import FileResponse
+    from app.services.backup_service import BACKUPS_DIR
+
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.endswith(".gz"):
+        raise HTTPException(status_code=400, detail="اسم ملف النسخة الاحتياطية غير صالح")
+    target = (BACKUPS_DIR / safe_name).resolve()
+    if not str(target).startswith(str(BACKUPS_DIR.resolve())) or not target.exists():
+        raise HTTPException(status_code=404, detail="النسخة الاحتياطية غير موجودة")
+    return FileResponse(path=str(target), filename=safe_name, media_type="application/gzip")

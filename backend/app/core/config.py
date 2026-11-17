@@ -1,13 +1,21 @@
 import os
 from pathlib import Path
 from typing import Optional
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+_WEAK_DEFAULT_SECRETS = {
+    "arp-secret-key-production-super-secure-change-in-env-2026",
+    "csrf-secret-key-arp-double-submit-2026",
+    "password-reset-itsdangerous-secret-2026",
+}
+
 
 class Settings(BaseSettings):
     APP_NAME: str = "ARP (Advanced Reservation Platform)"
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     API_V1_STR: str = "/api"
     SECRET_KEY: str = "arp-secret-key-production-super-secure-change-in-env-2026"
     ALGORITHM: str = "HS256"
@@ -17,6 +25,17 @@ class Settings(BaseSettings):
     PASSWORD_RESET_SECRET: str = "password-reset-itsdangerous-secret-2026"
     PASSWORD_RESET_SALT: str = "password-reset-salt-2026"
     PASSWORD_RESET_TOKEN_EXPIRE_SECONDS: int = 3600  # 1 hour
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if (self.ENVIRONMENT or "").strip().lower() == "production":
+            for key_name in ("SECRET_KEY", "CSRF_SECRET_KEY", "PASSWORD_RESET_SECRET"):
+                val = getattr(self, key_name, "")
+                if not val or val in _WEAK_DEFAULT_SECRETS or len(val) < 24:
+                    raise ValueError(
+                        f"خطأ أمني حرج: لا يمكن تشغيل النظام في وضع الإنتاج (ENVIRONMENT=production) مع استخدام المفتاح الافتراضي أو الضعيف '{key_name}'. يجب ضبطه في ملف .env."
+                    )
+        return self
 
     # Database
     DATABASE_URL: str = os.getenv(
