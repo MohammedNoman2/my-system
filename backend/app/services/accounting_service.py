@@ -22,10 +22,15 @@ class AccountingMismatchException(Exception):
 
 # Default Core System Accounts
 DEFAULT_ACCOUNTS = [
-    # Cash / Bank Accounts (ASSET)
+    # Cash Accounts (ASSET)
     {"code": "1101-YER", "name": "الصندوق الرئيسي - ريال يمني", "type": AccountType.ASSET, "curr": AccountCurrency.YER},
     {"code": "1101-SAR", "name": "الصندوق الرئيسي - ريال سعودي", "type": AccountType.ASSET, "curr": AccountCurrency.SAR},
     {"code": "1101-USD", "name": "الصندوق الرئيسي - دولار أمريكي", "type": AccountType.ASSET, "curr": AccountCurrency.USD},
+
+    # Bank & Exchange Transfer Accounts (ASSET)
+    {"code": "1102-YER", "name": "الحسابات البنكية والحوالات - ريال يمني", "type": AccountType.ASSET, "curr": AccountCurrency.YER},
+    {"code": "1102-SAR", "name": "الحسابات البنكية والحوالات - ريال سعودي", "type": AccountType.ASSET, "curr": AccountCurrency.SAR},
+    {"code": "1102-USD", "name": "الحسابات البنكية والحوالات - دولار أمريكي", "type": AccountType.ASSET, "curr": AccountCurrency.USD},
 
     # Revenue Accounts (REVENUE)
     {"code": "4101-YER", "name": "إيرادات مبيعات الحجوزات - ريال يمني", "type": AccountType.REVENUE, "curr": AccountCurrency.YER},
@@ -184,6 +189,21 @@ async def get_account_by_code(session: AsyncSession, code: str) -> Account:
         if not acc:
             raise ValueError(f"الحساب برمز {code} غير معرف في دليل الحسابات")
     return acc
+
+
+async def get_payment_channel_account(
+    session: AsyncSession, payment_method: Any, currency: str
+) -> Account:
+    """
+    يرجع حساب الخزينة المناسب حسب قناة الدفع:
+    - cash -> الصندوق النقدي 1101-{CURR}
+    - bank_transfer / check -> الحسابات البنكية والحوالات 1102-{CURR}
+    (القيود التاريخية المرحلة سابقاً على 1101 تبقى كما هي دون مساس).
+    """
+    pm_val = payment_method.value if hasattr(payment_method, "value") else str(payment_method or "cash")
+    prefix = "1101" if pm_val.lower() == "cash" else "1102"
+    curr_u = (currency or "YER").upper()
+    return await get_account_by_code(session, f"{prefix}-{curr_u}")
 
 
 async def create_journal_entry(

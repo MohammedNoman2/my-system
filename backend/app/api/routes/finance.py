@@ -43,6 +43,7 @@ from app.services.accounting_service import (
     get_entity_account,
     get_entity_balance,
     get_exchange_rate_to_yer,
+    get_payment_channel_account,
     init_chart_of_accounts,
 )
 from app.services.counter_service import get_next_reference_number
@@ -267,7 +268,7 @@ async def create_receipt_voucher(
     db.add(tx)
 
     je_ref = await get_next_reference_number(db, "JE")
-    cash_acc = await get_account_by_code(db, f"1101-{data.currency}")
+    cash_acc = await get_payment_channel_account(db, data.payment_method, data.currency)
     if data.entity_type == EntityType.CUSTOMER:
         entity_acc = await get_entity_account(db, "customer", data.entity_id, data.currency, entity_name)
     else:
@@ -351,7 +352,7 @@ async def create_receipt_voucher_v2(
 
     # ─── Process Allocations ─────────────────────────────────────────────
     je_lines = []
-    cash_acc = await get_account_by_code(db, f"1101-{data.currency}")
+    cash_acc = await get_payment_channel_account(db, data.payment_method, data.currency)
     voucher_rate_to_yer = await get_exchange_rate_to_yer(db, data.currency)
     cash_debit_base = (data.total_amount * voucher_rate_to_yer).quantize(Decimal("0.0001"))
     
@@ -561,7 +562,7 @@ async def create_payment_voucher(
     db.add(tx)
 
     je_ref = await get_next_reference_number(db, "JE")
-    cash_acc = await get_account_by_code(db, f"1101-{data.currency}")
+    cash_acc = await get_payment_channel_account(db, data.payment_method, data.currency)
     if supplier:
         entity_acc = await get_entity_account(db, "supplier", data.entity_id, data.currency, entity_name)
     else:
@@ -625,7 +626,7 @@ async def create_expense(
     db.add(tx)
 
     je_ref = await get_next_reference_number(db, "JE")
-    cash_acc = await get_account_by_code(db, f"1101-{data.currency}")
+    cash_acc = await get_payment_channel_account(db, data.payment_method, data.currency)
     exp_acc = await get_account_by_code(db, f"5201-{data.currency}")
 
     await create_journal_entry(session=db, entry_number=je_ref, reference_type="EXPENSE",
@@ -741,7 +742,7 @@ async def void_voucher(
             })
     else:
         # Fallback: simple 2-line reversal
-        cash_acc = await get_account_by_code(db, f"1101-{voucher.currency}")
+        cash_acc = await get_payment_channel_account(db, voucher.payment_method, voucher.currency)
         entity_acc = await get_entity_account(
             db, "customer" if voucher.entity_type == EntityType.CUSTOMER else "supplier",
             voucher.entity_id, voucher.currency)

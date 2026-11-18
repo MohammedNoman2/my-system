@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.models.booking import BookingStatus, BookingType
 from app.models.booking_details.flight import FlightTicketType
 from app.models.booking_details.passport import PassportPriority, PassportType
+from app.models.financial import PaymentMethod
 
 
 import re
@@ -158,6 +159,8 @@ class BookingCreate(BaseModel):
     supplier_name: Optional[str] = None
     notes: Optional[str] = None
     use_credit_balance: bool = True
+    payment_method: PaymentMethod = PaymentMethod.CASH
+    reference_number: Optional[str] = None
 
     # Exactly one of the detail models will be populated
     flight_details: Optional[FlightDetailCreate] = None
@@ -171,6 +174,8 @@ class BookingCancelRequest(BaseModel):
     reason: Optional[str] = None
     cancellation_reason: Optional[str] = None
     refund_amount: Decimal = Decimal("0.00")
+    payment_method: PaymentMethod = PaymentMethod.CASH
+    reference_number: Optional[str] = Field(None, max_length=100)
 
     @model_validator(mode="after")
     def ensure_reason(self) -> "BookingCancelRequest":

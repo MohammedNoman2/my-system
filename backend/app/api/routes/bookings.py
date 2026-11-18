@@ -42,6 +42,7 @@ from app.services.accounting_service import (
     get_customer_available_credit,
     get_entity_account,
     get_entity_balance,
+    get_payment_channel_account,
 )
 from app.services.shift_service import get_active_shift
 from app.utils.audit import log_audit_event
@@ -427,9 +428,16 @@ async def create_booking(
         lines_data=je_lines,
     )
 
-    # 4. P5: If cash_paid_dec > 0, record receipt voucher AND its dedicated RECEIPT JournalEntry
+    # 4. P5 & 5-A2: If cash_paid_dec > 0, route to 1101 (cash + shift) or 1102 (bank/check without cash shift)
     if cash_paid_dec > Decimal("0.00"):
-        active_shift = await get_active_shift(db, current_user.id, raise_if_none=False)
+        pm_val = getattr(data, "payment_method", PaymentMethod.CASH) or PaymentMethod.CASH
+        ref_doc = (getattr(data, "reference_number", None) or "").strip() or None
+        active_shift = (
+            await get_active_shift(db, current_user.id, raise_if_none=False)
+            if pm_val == PaymentMethod.CASH
+            else None
+        )
+        channel_acc = await get_payment_channel_account(db, pm_val, curr_str)
         rc_ref = await get_next_reference_number(db, "RC")
         payment_record = FinancialTransaction(
             transaction_id=rc_ref,
@@ -438,7 +446,8 @@ async def create_booking(
             entity_id=customer.id,
             amount=cash_paid_dec,
             currency=curr_str,
-            payment_method=PaymentMethod.CASH,
+            payment_method=pm_val,
+            reference_number=ref_doc,
             notes=f"دفعة مقدمة لحجز {ref_num}",
             transaction_date=office_today(),
             booking_id=booking.id,
@@ -457,7 +466,7 @@ async def create_booking(
             currency=curr_str,
             description=f"سند قبض دفعة مقدمة {rc_ref} لحجز {ref_num} - العميل: {customer.name}",
             lines_data=[
-                {"account_id": cash_acc.id, "debit": cash_paid_dec, "credit": Decimal("0.0000")},
+                {"account_id": channel_acc.id, "debit": cash_paid_dec, "credit": Decimal("0.0000")},
                 {"account_id": cust_acc.id, "debit": Decimal("0.0000"), "credit": cash_paid_dec},
             ],
         )
@@ -916,7 +925,7 @@ async def cancel_booking(
     curr_str = booking.currency or "YER"
     je_cancel_ref = await get_next_reference_number(db, "JE")
 
-    cash_acc = await get_account_by_code(db, f"1101-{curr_str}")
+    cash_acc = await get_payment_channel_account(db, data.payment_method, curr_str)
     cust_acc = await get_entity_account(db, "customer", customer.id, curr_str, customer.name if customer else "")
     sales_acc = await get_account_by_code(db, f"4101-{curr_str}")
     cancel_fee_acc = await get_account_by_code(db, f"4201-{curr_str}")
@@ -974,9 +983,13 @@ async def cancel_booking(
         if supp_obj:
             supp_obj.balance = await get_entity_balance(db, "supplier", supp_obj.id)
 
-    # If money is refunded back to customer, record payment_out and link to active shift
+    # If money is refunded back to customer, record payment_out and link to active shift (cash only)
     if data.refund_amount > 0 and customer:
-        active_shift = await get_active_shift(db, current_user.id, raise_if_none=False)
+        active_shift = (
+            await get_active_shift(db, current_user.id, raise_if_none=False)
+            if data.payment_method == PaymentMethod.CASH
+            else None
+        )
         py_ref = await get_next_reference_number(db, "PY")
         refund_record = FinancialTransaction(
             transaction_id=py_ref,
@@ -985,7 +998,8 @@ async def cancel_booking(
             entity_id=customer.id,
             amount=data.refund_amount,
             currency=booking.currency,
-            payment_method=PaymentMethod.CASH,
+            payment_method=data.payment_method,
+            reference_number=data.reference_number,
             notes=f"مبلغ مسترد لإلغاء الحجز {booking.ticket_number}: {data.reason}",
             transaction_date=office_today(),
             booking_id=booking.id,
