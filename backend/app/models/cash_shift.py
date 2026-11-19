@@ -44,16 +44,28 @@ class CashShift(Base):
     )
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # العهدة الافتتاحية بالريال اليمني
+    # العهدة الافتتاحية (العمود الأساسي يمثل YER للتوافق مع السجلات السابقة)
     starting_balance: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), default=Decimal("0.0000"), nullable=False
     )
-    # الرصيد الدفتري المحسوب آلياً عند الإغلاق
+    starting_balance_sar: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), default=Decimal("0.0000"), nullable=False
+    )
+    starting_balance_usd: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), default=Decimal("0.0000"), nullable=False
+    )
+    # الرصيد الدفتري المحسوب آلياً عند الإغلاق لكل عملة
     ending_balance_system: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
-    # الرصيد الفعلي المدخل عند الجرد
+    ending_balance_system_sar: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    ending_balance_system_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    # الرصيد الفعلي المدخل عند الجرد لكل عملة
     ending_balance_actual: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
-    # فارق العجز أو الفائض (actual - system)
+    ending_balance_actual_sar: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    ending_balance_actual_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    # فارق العجز أو الفائض (actual - system) لكل عملة
     difference: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    difference_sar: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
+    difference_usd: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 4), nullable=True)
 
     status: Mapped[ShiftStatus] = mapped_column(
         Enum(ShiftStatus, values_callable=lambda obj: [e.value for e in obj]),

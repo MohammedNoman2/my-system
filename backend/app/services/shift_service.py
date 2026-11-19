@@ -24,13 +24,67 @@ class ShiftRequiredException(HTTPException):
         )
 
 
+SUPPORTED_SHIFT_CURRENCIES = ("YER", "SAR", "USD")
+
+
+async def compute_shift_currency_totals(db: AsyncSession, shift: CashShift) -> dict:
+    """حساب المقبوضات والمصروفات النقدية والرصيد الدفتري لكل عملة (YER, SAR, USD) في الوردية."""
+    stmt = (
+        select(
+            FinancialTransaction.currency,
+            FinancialTransaction.type,
+            func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0.0000")),
+        )
+        .where(
+            FinancialTransaction.shift_id == shift.id,
+            FinancialTransaction.payment_method == PaymentMethod.CASH,
+            FinancialTransaction.is_void == False,
+        )
+        .group_by(FinancialTransaction.currency, FinancialTransaction.type)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    totals_in = {c: Decimal("0.0000") for c in SUPPORTED_SHIFT_CURRENCIES}
+    totals_out = {c: Decimal("0.0000") for c in SUPPORTED_SHIFT_CURRENCIES}
+    for curr, tx_type, amt in rows:
+        curr_u = (curr or "YER").upper()
+        if curr_u not in totals_in:
+            continue
+        val = Decimal(str(amt or 0)).quantize(Decimal("0.0001"))
+        if tx_type == TransactionType.PAYMENT_IN:
+            totals_in[curr_u] += val
+        elif tx_type in (TransactionType.PAYMENT_OUT, TransactionType.EXPENSE):
+            totals_out[curr_u] += val
+
+    starting_map = {
+        "YER": Decimal(str(shift.starting_balance or 0)).quantize(Decimal("0.0001")),
+        "SAR": Decimal(str(getattr(shift, "starting_balance_sar", 0) or 0)).quantize(Decimal("0.0001")),
+        "USD": Decimal(str(getattr(shift, "starting_balance_usd", 0) or 0)).quantize(Decimal("0.0001")),
+    }
+
+    result = {}
+    for curr in SUPPORTED_SHIFT_CURRENCIES:
+        start_val = starting_map[curr]
+        in_val = totals_in[curr]
+        out_val = totals_out[curr]
+        sys_val = (start_val + in_val - out_val).quantize(Decimal("0.0001"))
+        result[curr] = {
+            "starting": start_val,
+            "total_in": in_val,
+            "total_out": out_val,
+            "system_balance": sys_val,
+        }
+    return result
+
+
 async def open_shift(
     db: AsyncSession,
     user_id: int,
     starting_balance: Decimal,
+    starting_balance_sar: Decimal = Decimal("0.0000"),
+    starting_balance_usd: Decimal = Decimal("0.0000"),
 ) -> CashShift:
-    """فتح وردية نقدية جديدة — يرفض إذا كانت هناك وردية مفتوحة مسبقاً."""
-    # التحقق من عدم وجود وردية مفتوحة
+    """فتح وردية نقدية جديدة متعددة العملات — يرفض إذا كانت هناك وردية مفتوحة مسبقاً."""
     stmt = select(CashShift).where(
         CashShift.user_id == user_id,
         CashShift.status == ShiftStatus.OPEN,
@@ -47,7 +101,9 @@ async def open_shift(
     shift = CashShift(
         shift_number=shift_number,
         user_id=user_id,
-        starting_balance=starting_balance,
+        starting_balance=Decimal(str(starting_balance)).quantize(Decimal("0.0001")),
+        starting_balance_sar=Decimal(str(starting_balance_sar or 0)).quantize(Decimal("0.0001")),
+        starting_balance_usd=Decimal(str(starting_balance_usd or 0)).quantize(Decimal("0.0001")),
         opened_at=datetime.now(timezone.utc),
         status=ShiftStatus.OPEN,
     )
@@ -79,9 +135,10 @@ async def close_shift(
     user_id: int,
     actual_cash: Decimal,
     notes: Optional[str] = None,
+    actual_cash_sar: Optional[Decimal] = None,
+    actual_cash_usd: Optional[Decimal] = None,
 ) -> CashShift:
-    """إغلاق الوردية وحساب الفارق بين الرصيد الدفتري والفعلي."""
-    # قفل الصف تشاؤمياً
+    """إغلاق الوردية وحساب الفارق بين الرصيد الدفتري والفعلي لكل عملة (YER, SAR, USD)."""
     stmt = select(CashShift).where(
         CashShift.id == shift_id,
         CashShift.user_id == user_id,
@@ -94,41 +151,28 @@ async def close_shift(
     if shift.status == ShiftStatus.CLOSED:
         raise HTTPException(status_code=400, detail="الوردية مغلقة مسبقاً")
 
-    # حساب إجمالي المقبوضات والمدفوعات النقدية خلال الوردية
-    cash_in_stmt = select(
-        func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0.0000"))
-    ).where(
-        FinancialTransaction.shift_id == shift_id,
-        FinancialTransaction.type == TransactionType.PAYMENT_IN,
-        FinancialTransaction.payment_method == PaymentMethod.CASH,
-        FinancialTransaction.is_void == False,
-        FinancialTransaction.currency == "YER",
-    )
-    cash_out_stmt = select(
-        func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0.0000"))
-    ).where(
-        FinancialTransaction.shift_id == shift_id,
-        FinancialTransaction.type.in_([TransactionType.PAYMENT_OUT, TransactionType.EXPENSE]),
-        FinancialTransaction.payment_method == PaymentMethod.CASH,
-        FinancialTransaction.is_void == False,
-        FinancialTransaction.currency == "YER",
-    )
+    by_curr = await compute_shift_currency_totals(db, shift)
 
-    cash_in = (await db.execute(cash_in_stmt)).scalar() or Decimal("0.0000")
-    cash_out = (await db.execute(cash_out_stmt)).scalar() or Decimal("0.0000")
+    sys_yer = by_curr["YER"]["system_balance"]
+    sys_sar = by_curr["SAR"]["system_balance"]
+    sys_usd = by_curr["USD"]["system_balance"]
 
-    # ending_system = starting + cash_in - cash_out
-    ending_system = (
-        Decimal(str(shift.starting_balance))
-        + Decimal(str(cash_in))
-        - Decimal(str(cash_out))
-    ).quantize(Decimal("0.0001"))
+    act_yer = Decimal(str(actual_cash)).quantize(Decimal("0.0001"))
+    act_sar = Decimal(str(actual_cash_sar if actual_cash_sar is not None else 0)).quantize(Decimal("0.0001"))
+    act_usd = Decimal(str(actual_cash_usd if actual_cash_usd is not None else 0)).quantize(Decimal("0.0001"))
 
-    difference = (Decimal(str(actual_cash)) - ending_system).quantize(Decimal("0.0001"))
+    shift.ending_balance_system = sys_yer
+    shift.ending_balance_actual = act_yer
+    shift.difference = (act_yer - sys_yer).quantize(Decimal("0.0001"))
 
-    shift.ending_balance_system = ending_system
-    shift.ending_balance_actual = Decimal(str(actual_cash)).quantize(Decimal("0.0001"))
-    shift.difference = difference
+    shift.ending_balance_system_sar = sys_sar
+    shift.ending_balance_actual_sar = act_sar
+    shift.difference_sar = (act_sar - sys_sar).quantize(Decimal("0.0001"))
+
+    shift.ending_balance_system_usd = sys_usd
+    shift.ending_balance_actual_usd = act_usd
+    shift.difference_usd = (act_usd - sys_usd).quantize(Decimal("0.0001"))
+
     shift.closed_at = datetime.now(timezone.utc)
     shift.status = ShiftStatus.CLOSED
     shift.closing_notes = notes

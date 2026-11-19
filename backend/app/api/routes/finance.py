@@ -50,6 +50,7 @@ from app.services.counter_service import get_next_reference_number
 from app.services.shift_service import (
     ShiftRequiredException,
     close_shift,
+    compute_shift_currency_totals,
     get_active_shift,
     open_shift,
 )
@@ -63,12 +64,16 @@ router = APIRouter(prefix="/finance", tags=["Finance"])
 # ─────────────────────────────────────────────────────────────────────────────
 
 class OpenShiftRequest(BaseModel):
-    starting_balance: Decimal = Field(ge=0, description="العهدة النقدية الافتتاحية بالريال اليمني")
+    starting_balance: Decimal = Field(default=Decimal("0"), ge=0, description="العهدة النقدية الافتتاحية بالريال اليمني")
+    starting_balance_sar: Decimal = Field(default=Decimal("0"), ge=0, description="العهدة النقدية الافتتاحية بالريال السعودي")
+    starting_balance_usd: Decimal = Field(default=Decimal("0"), ge=0, description="العهدة النقدية الافتتاحية بالدولار الأمريكي")
 
 
 class CloseShiftRequest(BaseModel):
     shift_id: int
-    actual_cash: Decimal = Field(ge=0, description="النقدية الفعلية عند الجرد")
+    actual_cash: Decimal = Field(ge=0, description="النقدية الفعلية بالريال اليمني عند الجرد")
+    actual_cash_sar: Optional[Decimal] = Field(default=None, ge=0, description="النقدية الفعلية بالريال السعودي عند الجرد")
+    actual_cash_usd: Optional[Decimal] = Field(default=None, ge=0, description="النقدية الفعلية بالدولار الأمريكي عند الجرد")
     notes: Optional[str] = None
 
 
@@ -107,10 +112,28 @@ async def open_cash_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """فتح وردية نقدية جديدة — متاح للجميع (موظف/محاسب/مدير)."""
-    shift = await open_shift(db, current_user.id, data.starting_balance)
-    await log_audit_event(db, "INSERT", "cash_shifts", user=current_user,
-                          record_id=shift.id, new_data={"shift_number": shift.shift_number}, request=request)
+    """فتح وردية نقدية جديدة متعددة العملات — متاح للجميع (موظف/محاسب/مدير)."""
+    shift = await open_shift(
+        db,
+        current_user.id,
+        data.starting_balance,
+        starting_balance_sar=data.starting_balance_sar,
+        starting_balance_usd=data.starting_balance_usd,
+    )
+    await log_audit_event(
+        db,
+        "INSERT",
+        "cash_shifts",
+        user=current_user,
+        record_id=shift.id,
+        new_data={
+            "shift_number": shift.shift_number,
+            "starting_balance": float(shift.starting_balance),
+            "starting_balance_sar": float(shift.starting_balance_sar),
+            "starting_balance_usd": float(shift.starting_balance_usd),
+        },
+        request=request,
+    )
     await db.commit()
     return {
         "message": "تم فتح الوردية بنجاح",
@@ -118,6 +141,8 @@ async def open_cash_shift(
         "shift_number": shift.shift_number,
         "started_at": to_office_time(shift.opened_at).isoformat(),
         "starting_balance": float(shift.starting_balance),
+        "starting_balance_sar": float(shift.starting_balance_sar),
+        "starting_balance_usd": float(shift.starting_balance_usd),
     }
 
 
@@ -126,30 +151,13 @@ async def get_active_shift_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """جلب حالة الوردية الحالية للمستخدم."""
+    """جلب حالة الوردية الحالية للمستخدم شاملة أرصدة العملات الثلاث (YER, SAR, USD)."""
     shift = await get_active_shift(db, current_user.id)
     if not shift:
         return {"active": False, "shift": None}
 
-    # حساب إجمالي المقبوضات والمصروفات خلال الوردية
-    cash_in = await db.execute(
-        select(func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0")))
-        .where(FinancialTransaction.shift_id == shift.id,
-               FinancialTransaction.type == TransactionType.PAYMENT_IN,
-               FinancialTransaction.payment_method == PaymentMethod.CASH,
-               FinancialTransaction.currency == "YER",
-               FinancialTransaction.is_void == False)
-    )
-    cash_out = await db.execute(
-        select(func.coalesce(func.sum(FinancialTransaction.amount), Decimal("0")))
-        .where(FinancialTransaction.shift_id == shift.id,
-               FinancialTransaction.type.in_([TransactionType.PAYMENT_OUT, TransactionType.EXPENSE]),
-               FinancialTransaction.payment_method == PaymentMethod.CASH,
-               FinancialTransaction.currency == "YER",
-               FinancialTransaction.is_void == False)
-    )
-    total_in = cash_in.scalar() or Decimal("0")
-    total_out = cash_out.scalar() or Decimal("0")
+    by_curr = await compute_shift_currency_totals(db, shift)
+    yer_info = by_curr["YER"]
 
     return {
         "active": True,
@@ -157,11 +165,20 @@ async def get_active_shift_status(
             "id": shift.id,
             "shift_number": shift.shift_number,
             "opened_at": to_office_time(shift.opened_at).isoformat(),
-            "starting_balance": float(shift.starting_balance),
-            "total_in": float(total_in),
-            "total_out": float(total_out),
-            "current_system_balance": float(Decimal(str(shift.starting_balance)) + Decimal(str(total_in)) - Decimal(str(total_out))),
-        }
+            "starting_balance": float(yer_info["starting"]),
+            "total_in": float(yer_info["total_in"]),
+            "total_out": float(yer_info["total_out"]),
+            "current_system_balance": float(yer_info["system_balance"]),
+            "balances_by_currency": {
+                curr: {
+                    "starting": float(vals["starting"]),
+                    "total_in": float(vals["total_in"]),
+                    "total_out": float(vals["total_out"]),
+                    "current_system_balance": float(vals["system_balance"]),
+                }
+                for curr, vals in by_curr.items()
+            },
+        },
     }
 
 
@@ -172,10 +189,30 @@ async def close_cash_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """إغلاق الوردية وحساب الفارق."""
-    shift = await close_shift(db, data.shift_id, current_user.id, data.actual_cash, data.notes)
-    await log_audit_event(db, "UPDATE", "cash_shifts", user=current_user, record_id=shift.id,
-                          new_data={"status": "closed", "difference": float(shift.difference or 0)}, request=request)
+    """إغلاق الوردية وحساب الفارق لكل عملة."""
+    shift = await close_shift(
+        db,
+        data.shift_id,
+        current_user.id,
+        data.actual_cash,
+        data.notes,
+        actual_cash_sar=data.actual_cash_sar,
+        actual_cash_usd=data.actual_cash_usd,
+    )
+    await log_audit_event(
+        db,
+        "UPDATE",
+        "cash_shifts",
+        user=current_user,
+        record_id=shift.id,
+        new_data={
+            "status": "closed",
+            "difference": float(shift.difference or 0),
+            "difference_sar": float(shift.difference_sar or 0),
+            "difference_usd": float(shift.difference_usd or 0),
+        },
+        request=request,
+    )
     await db.commit()
     return {
         "message": "تم إغلاق الوردية بنجاح",
@@ -184,6 +221,26 @@ async def close_cash_shift(
         "ending_balance_system": float(shift.ending_balance_system),
         "ending_balance_actual": float(shift.ending_balance_actual),
         "difference": float(shift.difference),
+        "balances_by_currency": {
+            "YER": {
+                "starting": float(shift.starting_balance),
+                "ending_system": float(shift.ending_balance_system),
+                "ending_actual": float(shift.ending_balance_actual),
+                "difference": float(shift.difference),
+            },
+            "SAR": {
+                "starting": float(shift.starting_balance_sar),
+                "ending_system": float(shift.ending_balance_system_sar or 0),
+                "ending_actual": float(shift.ending_balance_actual_sar or 0),
+                "difference": float(shift.difference_sar or 0),
+            },
+            "USD": {
+                "starting": float(shift.starting_balance_usd),
+                "ending_system": float(shift.ending_balance_system_usd or 0),
+                "ending_actual": float(shift.ending_balance_actual_usd or 0),
+                "difference": float(shift.difference_usd or 0),
+            },
+        },
         "closed_at": to_office_time(shift.closed_at).isoformat(),
     }
 
@@ -200,13 +257,24 @@ async def list_shifts(
     shifts = res.scalars().all()
     return [
         {
-            "id": s.id, "shift_number": s.shift_number, "user_id": s.user_id,
-            "status": s.status.value, "opened_at": to_office_time(s.opened_at).isoformat(),
+            "id": s.id,
+            "shift_number": s.shift_number,
+            "user_id": s.user_id,
+            "status": s.status.value,
+            "opened_at": to_office_time(s.opened_at).isoformat(),
             "closed_at": to_office_time(s.closed_at).isoformat() if s.closed_at else None,
             "starting_balance": float(s.starting_balance),
-            "ending_balance_system": float(s.ending_balance_system) if s.ending_balance_system else None,
-            "ending_balance_actual": float(s.ending_balance_actual) if s.ending_balance_actual else None,
-            "difference": float(s.difference) if s.difference else None,
+            "starting_balance_sar": float(s.starting_balance_sar or 0),
+            "starting_balance_usd": float(s.starting_balance_usd or 0),
+            "ending_balance_system": float(s.ending_balance_system) if s.ending_balance_system is not None else None,
+            "ending_balance_system_sar": float(s.ending_balance_system_sar) if s.ending_balance_system_sar is not None else None,
+            "ending_balance_system_usd": float(s.ending_balance_system_usd) if s.ending_balance_system_usd is not None else None,
+            "ending_balance_actual": float(s.ending_balance_actual) if s.ending_balance_actual is not None else None,
+            "ending_balance_actual_sar": float(s.ending_balance_actual_sar) if s.ending_balance_actual_sar is not None else None,
+            "ending_balance_actual_usd": float(s.ending_balance_actual_usd) if s.ending_balance_actual_usd is not None else None,
+            "difference": float(s.difference) if s.difference is not None else None,
+            "difference_sar": float(s.difference_sar) if s.difference_sar is not None else None,
+            "difference_usd": float(s.difference_usd) if s.difference_usd is not None else None,
         }
         for s in shifts
     ]
