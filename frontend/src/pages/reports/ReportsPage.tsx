@@ -75,6 +75,12 @@ const ALL_REPORTS: ReportTab[] = [
     icon: <PieChart className="w-4 h-4 text-indigo-600" />,
   },
   {
+    id: 'daily_reconciliation',
+    title: 'تقرير المطابقة اليومية',
+    description: 'مطابقة الصندوق النقدي (1101) والبنك/الحوالات (1102) والورديات حسب العملة',
+    icon: <BookOpen className="w-4 h-4 text-emerald-600" />,
+  },
+  {
     id: 'ledger',
     title: 'كشف حساب',
     description: 'كشف حساب مالي تفصيلي للعملاء والموردين متعدد العملات',

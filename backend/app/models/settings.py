@@ -1,5 +1,6 @@
+from datetime import date
 from typing import Optional
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Date, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 from app.models.base import TimestampMixin
@@ -23,3 +24,4 @@ class Settings(Base, TimestampMixin):
         default="عالم النقل للسفريات - ثقتكم رصيدنا الأعلى",
         nullable=False
     )
+    accounting_lock_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

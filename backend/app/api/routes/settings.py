@@ -1,4 +1,6 @@
+from datetime import date
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -462,3 +464,66 @@ async def download_database_backup(
     if not str(target).startswith(str(BACKUPS_DIR.resolve())) or not target.exists():
         raise HTTPException(status_code=404, detail="النسخة الاحتياطية غير موجودة")
     return FileResponse(path=str(target), filename=safe_name, media_type="application/gzip")
+
+
+class PeriodLockUpdate(BaseModel):
+    accounting_lock_date: Optional[date] = None
+
+
+@router.get("/period-lock")
+async def get_period_lock(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """جلب تاريخ قفل الفترة المحاسبية الحالي."""
+    res = await db.execute(select(Settings).limit(1))
+    s = res.scalar_one_or_none()
+    lock_date = s.accounting_lock_date if s else None
+    return {
+        "accounting_lock_date": lock_date.isoformat() if lock_date else None,
+        "is_locked": lock_date is not None,
+    }
+
+
+@router.put("/period-lock")
+async def update_period_lock(
+    data: PeriodLockUpdate,
+    request: Request,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """تحديث تاريخ قفل الفترة المحاسبية (للمدير فقط). تمرير null لإلغاء القفل."""
+    res = await db.execute(select(Settings).limit(1))
+    s = res.scalar_one_or_none()
+    if not s:
+        s = Settings()
+        db.add(s)
+
+    old_val = s.accounting_lock_date.isoformat() if s.accounting_lock_date else None
+    s.accounting_lock_date = data.accounting_lock_date
+
+    await log_audit_event(
+        db,
+        "UPDATE",
+        "settings",
+        user=current_user,
+        record_id=s.id,
+        old_data={"accounting_lock_date": old_val},
+        new_data={
+            "accounting_lock_date": (
+                data.accounting_lock_date.isoformat()
+                if data.accounting_lock_date
+                else None
+            )
+        },
+        request=request,
+    )
+    await db.commit()
+    await db.refresh(s)
+    return {
+        "message": "تم تحديث تاريخ قفل الفترة المحاسبية بنجاح",
+        "accounting_lock_date": (
+            s.accounting_lock_date.isoformat() if s.accounting_lock_date else None
+        ),
+        "is_locked": s.accounting_lock_date is not None,
+    }

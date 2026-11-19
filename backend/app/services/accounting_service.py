@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
+from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.config import office_today
 from app.models.accounting import (
     Account,
     AccountCurrency,
@@ -18,6 +20,32 @@ from app.models.exchange_rate import ExchangeRate
 class AccountingMismatchException(Exception):
     """Raised when journal entry debit and credit do not balance within tolerance."""
     pass
+
+
+async def get_accounting_lock_date(session: AsyncSession) -> Optional[date]:
+    """يعيد تاريخ قفل الفترة المحاسبية من جدول الإعدادات، أو None إن لم يُحدَّد."""
+    from app.models.settings import Settings
+    res = await session.execute(select(Settings).limit(1))
+    s = res.scalar_one_or_none()
+    if s and s.accounting_lock_date:
+        return s.accounting_lock_date
+    return None
+
+
+async def assert_period_open(session: AsyncSession, target_date: Optional[date] = None) -> None:
+    """يرفض ترحيل أو عكس أي حركة محاسبية بتاريخ يقع ضمن الفترة المقفلة."""
+    lock_date = await get_accounting_lock_date(session)
+    if not lock_date:
+        return
+    effective_date = target_date or office_today()
+    if effective_date <= lock_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"الفترة المحاسبية مغلقة حتى تاريخ {lock_date.isoformat()}؛ "
+                f"لا يمكن ترحيل أو تعديل قيود بتاريخ {effective_date.isoformat()}."
+            ),
+        )
 
 
 # Default Core System Accounts
@@ -214,13 +242,16 @@ async def create_journal_entry(
     currency: str,
     description: str,
     lines_data: List[Dict[str, Any]],
+    entry_date: Optional[date] = None,
 ) -> JournalEntry:
     """
     Creates an immutable, balanced Double-Entry Journal Entry.
     Enforces Mandatory Directive 2:
     - Auto-balances rounding differences if |sum(debit_base) - sum(credit_base)| <= 0.05 to 5901-YER.
     - Rejects with AccountingMismatchException if imbalance > 0.05.
+    - Enforces Period Lock: rejects if entry_date falls within a locked period.
     """
+    await assert_period_open(session, entry_date or office_today())
     curr_enum = AccountCurrency(currency)
     rate = await get_exchange_rate_to_yer(session, currency)
 

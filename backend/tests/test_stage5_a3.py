@@ -88,7 +88,7 @@ def test_stage_5a3_alembic_multicurrency_columns():
         ver = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
         conn.close()
 
-        assert ver == "c9d0e1f2a3b4", f"Expected head c9d0e1f2a3b4, got {ver}"
+        assert ver in ("c9d0e1f2a3b4", "d0e1f2a3b4c5"), f"Expected head c9d0e1f2a3b4 or d0e1f2a3b4c5, got {ver}"
         for expected_col in (
             "starting_balance_sar",
             "starting_balance_usd",

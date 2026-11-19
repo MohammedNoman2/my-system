@@ -19,19 +19,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = [c["name"] for c in inspector.get_columns("cash_shifts")]
+    new_columns = [
+        ("starting_balance_sar", sa.Column("starting_balance_sar", sa.Numeric(18, 4), nullable=False, server_default="0.0000")),
+        ("starting_balance_usd", sa.Column("starting_balance_usd", sa.Numeric(18, 4), nullable=False, server_default="0.0000")),
+        ("ending_balance_system_sar", sa.Column("ending_balance_system_sar", sa.Numeric(18, 4), nullable=True)),
+        ("ending_balance_system_usd", sa.Column("ending_balance_system_usd", sa.Numeric(18, 4), nullable=True)),
+        ("ending_balance_actual_sar", sa.Column("ending_balance_actual_sar", sa.Numeric(18, 4), nullable=True)),
+        ("ending_balance_actual_usd", sa.Column("ending_balance_actual_usd", sa.Numeric(18, 4), nullable=True)),
+        ("difference_sar", sa.Column("difference_sar", sa.Numeric(18, 4), nullable=True)),
+        ("difference_usd", sa.Column("difference_usd", sa.Numeric(18, 4), nullable=True)),
+    ]
     with op.batch_alter_table("cash_shifts", schema=None) as batch_op:
-        batch_op.add_column(
-            sa.Column("starting_balance_sar", sa.Numeric(18, 4), nullable=False, server_default="0.0000")
-        )
-        batch_op.add_column(
-            sa.Column("starting_balance_usd", sa.Numeric(18, 4), nullable=False, server_default="0.0000")
-        )
-        batch_op.add_column(sa.Column("ending_balance_system_sar", sa.Numeric(18, 4), nullable=True))
-        batch_op.add_column(sa.Column("ending_balance_system_usd", sa.Numeric(18, 4), nullable=True))
-        batch_op.add_column(sa.Column("ending_balance_actual_sar", sa.Numeric(18, 4), nullable=True))
-        batch_op.add_column(sa.Column("ending_balance_actual_usd", sa.Numeric(18, 4), nullable=True))
-        batch_op.add_column(sa.Column("difference_sar", sa.Numeric(18, 4), nullable=True))
-        batch_op.add_column(sa.Column("difference_usd", sa.Numeric(18, 4), nullable=True))
+        for col_name, col_def in new_columns:
+            if col_name not in existing_cols:
+                batch_op.add_column(col_def)
 
 
 def downgrade() -> None:

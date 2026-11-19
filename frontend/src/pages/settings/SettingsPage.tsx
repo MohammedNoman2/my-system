@@ -73,10 +73,30 @@ export function SettingsPage() {
   // Audit logs state
   const [logs, setLogs] = useState<any[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [periodLockDate, setPeriodLockDate] = useState<string>('');
+  const [isSavingPeriodLock, setIsSavingPeriodLock] = useState(false);
 
   useEffect(() => {
     fetchOfficeSettings();
+    api.get('/settings/period-lock')
+      .then((res) => setPeriodLockDate(res.data?.accounting_lock_date || ''))
+      .catch(() => {});
   }, [fetchOfficeSettings]);
+
+  const handleSavePeriodLock = async (lockValue: string | null) => {
+    setIsSavingPeriodLock(true);
+    try {
+      const res = await api.put('/settings/period-lock', {
+        accounting_lock_date: lockValue || null,
+      });
+      setPeriodLockDate(res.data?.accounting_lock_date || '');
+      addToast(res.data?.message || 'تم تحديث قفل الفترة المحاسبية', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.detail || 'فشل تحديث قفل الفترة المحاسبية', 'error');
+    } finally {
+      setIsSavingPeriodLock(false);
+    }
+  };
 
   useEffect(() => {
     if (office) {
@@ -414,6 +434,50 @@ export function SettingsPage() {
                 </Button>
               </div>
             </form>
+          </CardContent>
+        </Card>
+
+        {/* Period Lock Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Lock className="w-5 h-5 text-amber-600" />
+              قفل الفترة المحاسبية (Period Lock)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-slate-600">
+              يمنع قفل الفترة المحاسبية ترحيل أو إلغاء أي قيود أو سندات بتاريخ يساوي أو يسبق تاريخ القفل المحدد.
+            </p>
+            <div className="flex flex-col sm:flex-row items-end gap-3">
+              <div className="w-full sm:w-64">
+                <Input
+                  label="مقفل حتى تاريخ"
+                  type="date"
+                  value={periodLockDate}
+                  onChange={(e) => setPeriodLockDate(e.target.value)}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="primary"
+                isLoading={isSavingPeriodLock}
+                onClick={() => handleSavePeriodLock(periodLockDate || null)}
+                icon={<Lock className="w-4 h-4" />}
+              >
+                حفظ تاريخ القفل
+              </Button>
+              {periodLockDate && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  isLoading={isSavingPeriodLock}
+                  onClick={() => handleSavePeriodLock(null)}
+                >
+                  فتح الفترة (إلغاء القفل)
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>

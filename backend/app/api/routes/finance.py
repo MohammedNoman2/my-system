@@ -37,6 +37,7 @@ from app.schemas.financial import (
     ReceiptVoucherCreate,
 )
 from app.services.accounting_service import (
+    assert_period_open,
     create_journal_entry,
     get_account_by_code,
     get_cash_balance_with_lock,
@@ -348,7 +349,8 @@ async def create_receipt_voucher(
         lines_data=[
             {"account_id": cash_acc.id, "debit": data.amount, "credit": Decimal("0.0000")},
             {"account_id": entity_acc.id, "debit": Decimal("0.0000"), "credit": data.amount},
-        ])
+        ],
+        entry_date=data.transaction_date)
 
     if data.entity_type == EntityType.CUSTOMER:
         customer.balance = await get_entity_balance(db, "customer", customer.id)
@@ -552,6 +554,7 @@ async def create_receipt_voucher_v2(
         reference_id=ref_num, currency=data.currency,
         description=f"سند قبض {ref_num} من {entity_name}{details_suffix}",
         lines_data=je_lines,
+        entry_date=data.transaction_date,
     )
 
     # تحديث رصيد الكيان
@@ -642,7 +645,8 @@ async def create_payment_voucher(
         lines_data=[
             {"account_id": entity_acc.id, "debit": data.amount, "credit": Decimal("0.0000")},
             {"account_id": cash_acc.id, "debit": Decimal("0.0000"), "credit": data.amount},
-        ])
+        ],
+        entry_date=data.transaction_date)
 
     if supplier:
         supplier.balance = await get_entity_balance(db, "supplier", supplier.id)
@@ -703,7 +707,8 @@ async def create_expense(
         lines_data=[
             {"account_id": exp_acc.id, "debit": data.amount, "credit": Decimal("0.0000")},
             {"account_id": cash_acc.id, "debit": Decimal("0.0000"), "credit": data.amount},
-        ])
+        ],
+        entry_date=data.transaction_date)
 
     await log_audit_event(db, "INSERT", "financial_transactions", user=current_user,
         new_data={"transaction_id": ref_num, "type": "expense", "amount": float(data.amount)}, request=request)
@@ -745,6 +750,8 @@ async def void_voucher(
     if voucher.is_void:
         raise HTTPException(status_code=400,
             detail=f"السند {voucher.transaction_id} ملغى مسبقاً في {voucher.voided_at}")
+
+    await assert_period_open(db)
 
     # ─── Reverse Booking Allocations ────────────────────────────────────
     for alloc in voucher.allocations:

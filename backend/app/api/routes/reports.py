@@ -6,10 +6,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
-from app.core.config import format_office_dt, office_date_range_utc
+from app.core.config import format_office_dt, office_date_range_utc, office_today
 from app.core.database import get_db
-from app.models.accounting import Account, EntityAccountType, JournalEntryLine
+from app.models.accounting import Account, EntityAccountType, JournalEntry, JournalEntryLine
 from app.models.booking import Booking, BookingStatus, BookingType
+from app.models.cash_shift import CashShift
 from app.models.customer import Customer
 from app.models.financial import FinancialTransaction, PaymentMethod, TransactionType
 from app.models.supplier import Supplier
@@ -516,6 +517,131 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
             total_amount=total_net_yer,
             totals_by_currency=formatted_curr,
             additional_totals=formatted_curr,
+            rows=rows,
+        )
+
+    elif filters.report_type == "daily_reconciliation":
+        rec_start = filters.start_date or office_today()
+        rec_end = filters.end_date or rec_start
+        rec_start_utc, rec_end_utc = office_date_range_utc(rec_start, rec_end)
+        rec_period = f"{rec_start.isoformat()} إلى {rec_end.isoformat()}"
+
+        # 1. مطابقة أرصدة القنوات (1101 نقدي مقابل 1102 بنكي/حوالات) من قيود اليومية
+        je_stmt = (
+            select(
+                Account.code,
+                Account.name,
+                func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000")),
+                func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == Account.id)
+            .join(JournalEntry, JournalEntryLine.journal_entry_id == JournalEntry.id)
+            .where(
+                Account.code.like("1101-%") | Account.code.like("1102-%"),
+                JournalEntry.date >= rec_start_utc,
+                JournalEntry.date <= rec_end_utc,
+            )
+            .group_by(Account.code, Account.name)
+            .order_by(Account.code)
+        )
+        je_rows = (await db.execute(je_stmt)).all()
+
+        # الأرصدة التراكمية الختامية حتى نهاية الفترة
+        closing_stmt = (
+            select(
+                Account.code,
+                func.coalesce(func.sum(JournalEntryLine.debit), Decimal("0.0000"))
+                - func.coalesce(func.sum(JournalEntryLine.credit), Decimal("0.0000")),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == Account.id)
+            .join(JournalEntry, JournalEntryLine.journal_entry_id == JournalEntry.id)
+            .where(
+                Account.code.like("1101-%") | Account.code.like("1102-%"),
+                JournalEntry.date <= rec_end_utc,
+            )
+            .group_by(Account.code)
+        )
+        closing_map = {code: Decimal(str(bal or 0)) for code, bal in (await db.execute(closing_stmt)).all()}
+
+        channel_map: Dict[str, Dict[str, Decimal]] = {
+            code: {"inflow": Decimal("0"), "outflow": Decimal("0")}
+            for code in ("1101-YER", "1101-SAR", "1101-USD", "1102-YER", "1102-SAR", "1102-USD")
+        }
+        name_map: Dict[str, str] = {
+            "1101-YER": "الصندوق الرئيسي - ريال يمني",
+            "1101-SAR": "الصندوق الرئيسي - ريال سعودي",
+            "1101-USD": "الصندوق الرئيسي - دولار أمريكي",
+            "1102-YER": "الحسابات البنكية والحوالات - ريال يمني",
+            "1102-SAR": "الحسابات البنكية والحوالات - ريال سعودي",
+            "1102-USD": "الحسابات البنكية والحوالات - دولار أمريكي",
+        }
+        for code, acc_name, deb, cred in je_rows:
+            if code in channel_map:
+                channel_map[code]["inflow"] = Decimal(str(deb or 0))
+                channel_map[code]["outflow"] = Decimal(str(cred or 0))
+                name_map[code] = acc_name
+
+        rows: List[Dict[str, Any]] = []
+        totals_by_curr: Dict[str, Dict[str, float]] = {}
+        total_net_yer = Decimal("0.00")
+
+        for code in ("1101-YER", "1101-SAR", "1101-USD", "1102-YER", "1102-SAR", "1102-USD"):
+            prefix, curr = code.split("-")
+            inflow = channel_map[code]["inflow"].quantize(Decimal("0.01"))
+            outflow = channel_map[code]["outflow"].quantize(Decimal("0.01"))
+            net = (inflow - outflow).quantize(Decimal("0.01"))
+            closing = closing_map.get(code, Decimal("0")).quantize(Decimal("0.01"))
+            channel_label = "صندوق نقدي (1101)" if prefix == "1101" else "بنك / حوالات (1102)"
+
+            if curr not in totals_by_curr:
+                totals_by_curr[curr] = {"inflow": 0.0, "outflow": 0.0, "net": 0.0}
+            totals_by_curr[curr]["inflow"] = round(totals_by_curr[curr]["inflow"] + float(inflow), 2)
+            totals_by_curr[curr]["outflow"] = round(totals_by_curr[curr]["outflow"] + float(outflow), 2)
+            totals_by_curr[curr]["net"] = round(totals_by_curr[curr]["net"] + float(net), 2)
+
+            rate = rates_map.get(curr, Decimal("1.0000"))
+            total_net_yer += (net * rate).quantize(Decimal("0.01"))
+
+            rows.append({
+                "النوع": "قناة مالية",
+                "القناة / المرجع": f"{code} — {channel_label}",
+                "البيان": name_map[code],
+                "العملة": curr,
+                "الوارد": float(inflow),
+                "الصادر": float(outflow),
+                "الصافي": float(net),
+                "الرصيد الختامي": float(closing),
+            })
+
+        # 2. ملخص الورديات النقدية في الفترة
+        shifts_stmt = (
+            select(CashShift)
+            .where(CashShift.opened_at >= rec_start_utc, CashShift.opened_at <= rec_end_utc)
+            .order_by(CashShift.opened_at.desc())
+        )
+        shifts = (await db.execute(shifts_stmt)).scalars().all()
+        for sh in shifts:
+            status_ar = "مفتوحة" if sh.status.value == "open" else "مغلقة"
+            diff_yer = float(Decimal(str(sh.difference or 0)).quantize(Decimal("0.01"))) if sh.difference is not None else 0.0
+            rows.append({
+                "النوع": "وردية نقدية",
+                "القناة / المرجع": sh.shift_number,
+                "البيان": f"حالة الوردية: {status_ar}",
+                "العملة": "YER",
+                "الوارد": float(Decimal(str(sh.starting_balance or 0)).quantize(Decimal("0.01"))),
+                "الصادر": float(Decimal(str(sh.ending_balance_actual or 0)).quantize(Decimal("0.01"))) if sh.ending_balance_actual is not None else 0.0,
+                "الصافي": diff_yer,
+                "الرصيد الختامي": float(Decimal(str(sh.ending_balance_system or 0)).quantize(Decimal("0.01"))) if sh.ending_balance_system is not None else 0.0,
+            })
+
+        return ReportSummary(
+            title="تقرير المطابقة اليومية (القنوات والورديات)",
+            report_type="daily_reconciliation",
+            period=rec_period,
+            total_count=len(rows),
+            total_amount=total_net_yer,
+            totals_by_currency=totals_by_curr,
+            additional_totals={"shifts_count": len(shifts), "channels": totals_by_curr},
             rows=rows,
         )
 
