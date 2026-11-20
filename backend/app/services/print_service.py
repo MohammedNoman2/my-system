@@ -1,5 +1,6 @@
 import logging
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from app.models.booking import Booking, BookingStatus, BookingType
@@ -484,22 +485,30 @@ def generate_financial_voucher_html(
 
     alloc_html = ""
     if allocations:
+        total_alloc_dec = sum((Decimal(str(a.get("allocated_amount") or 0)) for a in allocations), Decimal("0.00"))
+        surplus_dec = (Decimal(str(voucher.amount or 0)) - total_alloc_dec).quantize(Decimal("0.01"))
         alloc_rows = "".join(
             f"<tr>"
-            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>#{a.get('booking_id')}</td>"
-            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('allocated_amount')} {curr}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;font-weight:bold;'>{a.get('ticket_number') or ('#' + str(a.get('booking_id')))}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{float(a.get('allocated_amount') or 0):,.2f} {curr}</td>"
             f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('exchange_rate')}</td>"
-            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{a.get('allocated_in_booking_currency')} {a.get('target_currency')}</td>"
+            f"<td style='border:1px solid #1f2937;padding:4px 6px;text-align:center;'>{float(a.get('allocated_in_booking_currency') or 0):,.2f} {a.get('target_currency')}</td>"
             f"</tr>"
             for a in allocations
         )
+        surplus_note = ""
+        if is_receipt and surplus_dec > Decimal("0.00"):
+            surplus_note = (
+                f"<div style='margin-top:4px;font-size:11px;font-weight:bold;color:#065f46;'>"
+                f"فائض غير مخصص (مرحل كرصيد دائن للعميل): {surplus_dec:,.2f} {curr}</div>"
+            )
         alloc_html = f"""
         <div style="margin-top:8px;margin-bottom:8px;">
             <div style="font-size:11px;font-weight:bold;margin-bottom:4px;">تفاصيل تخصيص السداد على التذاكر:</div>
             <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #1f2937;">
                 <thead>
                     <tr style="background:#f3f4f6;">
-                        <th style="border:1px solid #1f2937;padding:4px;">معرف الحجز</th>
+                        <th style="border:1px solid #1f2937;padding:4px;">رقم التذكرة / الحجز</th>
                         <th style="border:1px solid #1f2937;padding:4px;">المبلغ المخصص</th>
                         <th style="border:1px solid #1f2937;padding:4px;">سعر الصرف</th>
                         <th style="border:1px solid #1f2937;padding:4px;">المعادل بعملة التذكرة</th>
@@ -507,6 +516,7 @@ def generate_financial_voucher_html(
                 </thead>
                 <tbody>{alloc_rows}</tbody>
             </table>
+            {surplus_note}
         </div>
         """
 

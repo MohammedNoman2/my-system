@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
-import { ArrowDownLeft, CheckCircle2, RefreshCw } from 'lucide-react';
+import { ArrowDownLeft, Plus, Trash2, RefreshCw } from 'lucide-react';
 import api from '../../services/api';
 import { useUIStore } from '../../context/uiStore';
 import type { Customer, Supplier } from '../../types';
@@ -10,6 +10,7 @@ import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
 import { Select } from '../common/Select';
 import { Button } from '../common/Button';
+import { EntityAutocomplete } from './EntityAutocomplete';
 
 const receiptSchema = yup.object({
   entity_type: yup.string().oneOf(['customer', 'supplier']).required('نوع الجهة مطلوب'),
@@ -20,11 +21,18 @@ const receiptSchema = yup.object({
   reference_document: yup.string().nullable().optional(),
   notes: yup.string().nullable().optional(),
   transaction_date: yup.string().required('تاريخ السند مطلوب'),
-  booking_id: yup.number().nullable().optional(),
-  exchange_rate: yup.number().positive().default(1).optional(),
 });
 
 type ReceiptFormValues = yup.InferType<typeof receiptSchema>;
+
+interface AllocationDraft {
+  booking_id: number;
+  ticket_number: string;
+  booking_currency: string;
+  remaining_amount: number;
+  allocated_amount: number;
+  ui_exchange_rate: number; // كم من عملة السند مقابل 1 من عملة التذكرة
+}
 
 interface ReceiptVoucherModalProps {
   isOpen: boolean;
@@ -42,6 +50,7 @@ export function ReceiptVoucherModal({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [unpaidBookings, setUnpaidBookings] = useState<any[]>([]);
+  const [allocations, setAllocations] = useState<AllocationDraft[]>([]);
   const [ratesToYer, setRatesToYer] = useState<Record<string, number>>({
     YER: 1,
     SAR: 140,
@@ -58,20 +67,18 @@ export function ReceiptVoucherModal({
       currency: 'YER',
       payment_method: 'cash',
       transaction_date: new Date().toISOString().split('T')[0],
-      exchange_rate: 1,
     },
   });
 
   const { register, watch, setValue, handleSubmit, reset, formState: { errors } } = form;
   const entityType = watch('entity_type');
   const entityId = watch('entity_id');
-  const selectedBookingId = watch('booking_id');
-  const receiptCurrency = watch('currency');
-  const amount = watch('amount') || 0;
-  const exchangeRate = watch('exchange_rate') || 1;
+  const receiptCurrency = String(watch('currency') || 'YER').toUpperCase();
+  const amount = Number(watch('amount') || 0);
 
   useEffect(() => {
     if (initialCustomerId) {
+      setValue('entity_type', 'customer');
       setValue('entity_id', initialCustomerId);
     }
   }, [initialCustomerId, setValue]);
@@ -107,6 +114,7 @@ export function ReceiptVoucherModal({
 
   useEffect(() => {
     async function fetchBookings() {
+      setAllocations([]);
       if (!entityId || entityType !== 'customer') {
         setUnpaidBookings([]);
         return;
@@ -124,26 +132,68 @@ export function ReceiptVoucherModal({
     fetchBookings();
   }, [entityId, entityType]);
 
-  const selectedBooking = unpaidBookings.find(b => b.id === selectedBookingId);
-  const isCrossCurrency = selectedBooking && selectedBooking.currency !== receiptCurrency;
+  const computeUiRate = (bookingCurr: string, voucherCurr: string) => {
+    const bCurr = (bookingCurr || 'YER').toUpperCase();
+    const vCurr = (voucherCurr || 'YER').toUpperCase();
+    if (bCurr === vCurr) return 1;
+    const targetInYer = ratesToYer[bCurr] || 1;
+    const voucherInYer = ratesToYer[vCurr] || 1;
+    const r = Number((targetInYer / voucherInYer).toFixed(4));
+    return r > 0 ? r : 1;
+  };
 
-  // حساب سعر الصرف الافتراضي ديناميكياً من أسعار الصرف المعتمدة في الإعدادات (كم وحدة من عملة السند مقابل 1 من عملة التذكرة)
+  // إعادة حساب سعر الصرف التلقائي للتخصيصات عند تغيير عملة السند
   useEffect(() => {
-    if (isCrossCurrency && selectedBooking) {
-      const targetCurr = String(selectedBooking.currency || 'YER').toUpperCase();
-      const voucherCurr = String(receiptCurrency || 'YER').toUpperCase();
-      const targetInYer = ratesToYer[targetCurr] || 1;
-      const voucherInYer = ratesToYer[voucherCurr] || 1;
-      const computedUiRate = Number((targetInYer / voucherInYer).toFixed(4));
-      setValue('exchange_rate', computedUiRate > 0 ? computedUiRate : 1);
-    } else {
-      setValue('exchange_rate', 1);
-    }
-  }, [receiptCurrency, selectedBooking?.currency, isCrossCurrency, ratesToYer, setValue]);
+    setAllocations((prev) =>
+      prev.map((a) => ({
+        ...a,
+        ui_exchange_rate: computeUiRate(a.booking_currency, receiptCurrency),
+      }))
+    );
+  }, [receiptCurrency, ratesToYer]);
 
-  const allocatedInBookingCurrency = isCrossCurrency ? amount / exchangeRate : amount;
+  const handleAddAllocation = (bookingId: number) => {
+    const b = unpaidBookings.find((item) => item.id === bookingId);
+    if (!b) return;
+    if (allocations.some((a) => a.booking_id === bookingId)) return;
+
+    const uiRate = computeUiRate(b.currency, receiptCurrency);
+    const defaultNeededInReceiptCurr = Number((Number(b.remaining_amount) * uiRate).toFixed(2));
+    const remainingBudget = Math.max(0, Number((amount - totalAllocated).toFixed(2)));
+    const initialAlloc = remainingBudget > 0 ? Math.min(defaultNeededInReceiptCurr, remainingBudget) : defaultNeededInReceiptCurr;
+
+    setAllocations((prev) => [
+      ...prev,
+      {
+        booking_id: b.id,
+        ticket_number: b.ticket_number,
+        booking_currency: String(b.currency || 'YER').toUpperCase(),
+        remaining_amount: Number(b.remaining_amount || 0),
+        allocated_amount: initialAlloc,
+        ui_exchange_rate: uiRate,
+      },
+    ]);
+  };
+
+  const totalAllocated = useMemo(
+    () =>
+      Number(
+        allocations.reduce((sum, a) => sum + Number(a.allocated_amount || 0), 0).toFixed(2)
+      ),
+    [allocations]
+  );
+  const unallocatedSurplus = Number((amount - totalAllocated).toFixed(2));
+
+  const availableToAdd = unpaidBookings.filter(
+    (b) => !allocations.some((a) => a.booking_id === b.id)
+  );
 
   const onSubmit = async (values: ReceiptFormValues) => {
+    if (totalAllocated > Number(values.amount)) {
+      addToast('مجموع المبالغ المخصصة للتذاكر يتجاوز إجمالي مبلغ السند', 'error');
+      return;
+    }
+
     setIsLoading(true);
     try {
       const payload: any = {
@@ -155,24 +205,24 @@ export function ReceiptVoucherModal({
         reference_number: values.reference_document || null,
         notes: values.notes || null,
         transaction_date: values.transaction_date,
-        allocations: []
+        allocations: allocations
+          .filter((a) => Number(a.allocated_amount) > 0)
+          .map((a) => {
+            const isCross = a.booking_currency !== String(values.currency).toUpperCase();
+            const rateToSend = isCross ? Number((1 / Number(a.ui_exchange_rate || 1)).toFixed(6)) : 1;
+            return {
+              booking_id: a.booking_id,
+              allocated_amount: Number(a.allocated_amount),
+              exchange_rate: rateToSend,
+            };
+          }),
       };
-
-      if (values.booking_id) {
-        // backend logic calculates: allocated_amount * exchange_rate
-        // since our UI uses division (amount / rate), we send (1 / rate) to backend
-        const rateToSend = isCrossCurrency ? (1 / Number(values.exchange_rate)) : 1;
-        payload.allocations.push({
-          booking_id: Number(values.booking_id),
-          allocated_amount: Number(values.amount),
-          exchange_rate: rateToSend
-        });
-      }
 
       const res = await api.post('/finance/receipt-voucher/v2', payload);
 
       addToast(`تم إصدار سند القبض بنجاح برقم (${res.data.transaction_id}) وتحديث الرصيد`, 'success');
       reset();
+      setAllocations([]);
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -188,7 +238,7 @@ export function ReceiptVoucherModal({
       isOpen={isOpen}
       onClose={onClose}
       title="إصدار سند قبض نقدية / تحويل (RC)"
-      description="استلام مبالغ مالية وقيدها مع إمكانية تسوية التذاكر المفتوحة وعمليات المصارفة"
+      description="استلام مبالغ مالية وقيدها مع إمكانية تسوية عدة تذاكر مفتوحة وعمليات المصارفة"
       size="lg"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -197,59 +247,28 @@ export function ReceiptVoucherModal({
             label="نوع الجهة المقبوض منها"
             required
             error={errors.entity_type?.message}
-            {...register('entity_type')}
+            {...register('entity_type', {
+              onChange: () => {
+                setValue('entity_id', undefined as any);
+                setAllocations([]);
+              },
+            })}
           >
             <option value="customer">عميل</option>
             <option value="supplier">مورد</option>
           </Select>
 
-          {entityType === 'customer' ? (
-            <Select
-              label="اختر العميل"
-              required
-              error={errors.entity_id?.message}
-              {...register('entity_id', { valueAsNumber: true })}
-            >
-              <option value="">-- اختر العميل --</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Select
-              label="اختر المورد"
-              required
-              error={errors.entity_id?.message}
-              {...register('entity_id', { valueAsNumber: true })}
-            >
-              <option value="">-- اختر المورد --</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
-          )}
-
-          <div className="sm:col-span-2">
-            <Select
-              label="تخصيص السداد لتذكرة محددة (اختياري)"
-              error={errors.booking_id?.message}
-              {...register('booking_id', { valueAsNumber: true })}
-            >
-              <option value="">-- إضافة كرصيد دائن عام (بدون تخصيص) --</option>
-              {unpaidBookings.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.ticket_number} - المتبقي: {b.remaining_amount} {b.currency}
-                </option>
-              ))}
-            </Select>
-          </div>
+          <EntityAutocomplete
+            label={entityType === 'customer' ? 'اختر العميل (بحث بالاسم أو الهاتف)' : 'اختر المورد (بحث)'}
+            options={entityType === 'customer' ? customers : suppliers}
+            value={entityId}
+            onChange={(id) => setValue('entity_id', id as any, { shouldValidate: true })}
+            required
+            error={errors.entity_id?.message}
+          />
 
           <Input
-            label="المبلغ المقبوض"
+            label="إجمالي المبلغ المقبوض"
             type="number"
             step="0.01"
             placeholder="0.00"
@@ -268,30 +287,6 @@ export function ReceiptVoucherModal({
             <option value="SAR">ريال سعودي (SAR)</option>
             <option value="USD">دولار أمريكي (USD)</option>
           </Select>
-          
-          {isCrossCurrency && (
-            <div className="sm:col-span-2 bg-blue-50 border border-blue-200 p-4 rounded-xl space-y-3">
-              <h4 className="text-sm font-bold text-blue-800 flex items-center gap-2">
-                <RefreshCw className="w-4 h-4" />
-                تسوية العملات المتقاطعة (مصارفة)
-              </h4>
-              <p className="text-xs text-blue-700">
-                التذكرة مقومة بـ {selectedBooking.currency} بينما السند المقبوض بـ {receiptCurrency}. يرجى تحديد سعر الصرف للخصم.
-              </p>
-              <Input
-                label={`سعر الصرف (كم ${receiptCurrency} مقابل 1 ${selectedBooking.currency})`}
-                type="number"
-                step="0.0001"
-                required={isCrossCurrency}
-                error={errors.exchange_rate?.message}
-                {...register('exchange_rate', { valueAsNumber: true })}
-              />
-              <div className="text-sm font-bold text-blue-900 bg-white p-2 rounded border border-blue-100 flex justify-between items-center">
-                <span>المبلغ المعادل المخصوم من التذكرة:</span>
-                <span>{allocatedInBookingCurrency.toLocaleString(undefined, { maximumFractionDigits: 2 })} {selectedBooking.currency}</span>
-              </div>
-            </div>
-          )}
 
           <Select
             label="طريقة الاستلام"
@@ -321,6 +316,148 @@ export function ReceiptVoucherModal({
             />
           </div>
         </div>
+
+        {/* Multi-Booking Allocations Section */}
+        {entityType === 'customer' && entityId && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <Plus className="w-4 h-4 text-emerald-600" />
+                تخصيص السداد على تذكرة أو أكثر (اختياري)
+              </h4>
+              {availableToAdd.length > 0 && (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    if (id) handleAddAllocation(id);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1e3a8a]"
+                >
+                  <option value="">+ أضف تذكرة للتسوية...</option>
+                  {availableToAdd.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.ticket_number} — المتبقي: {Number(b.remaining_amount).toLocaleString()} {b.currency}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {allocations.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                {unpaidBookings.length > 0
+                  ? 'يمكنك إضافة تذكرة أو عدة تذاكر من القائمة أعلاه لتسويتها، أو تركها فارغة لإضافة المبلغ كرصيد دائن للعميل.'
+                  : 'لا توجد تذاكر آجلة مفتوحة لهذا العميل — سيُضاف المبلغ كرصيد دائن.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {allocations.map((alloc, idx) => {
+                  const isCross = alloc.booking_currency !== receiptCurrency;
+                  const eqBooking = isCross
+                    ? Number((alloc.allocated_amount / (alloc.ui_exchange_rate || 1)).toFixed(2))
+                    : alloc.allocated_amount;
+                  return (
+                    <div
+                      key={alloc.booking_id}
+                      className="bg-white border border-slate-200 rounded-lg p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-bold text-slate-900">
+                          {alloc.ticket_number}{' '}
+                          <span className="font-normal text-slate-500">
+                            (المتبقي: {alloc.remaining_amount.toLocaleString()} {alloc.booking_currency})
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAllocations((prev) =>
+                              prev.filter((item) => item.booking_id !== alloc.booking_id)
+                            )
+                          }
+                          className="text-red-500 hover:text-red-700 p-1"
+                          title="إزالة"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className={`grid gap-2 ${isCross ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1'}`}>
+                        <div>
+                          <label className="block text-[11px] text-slate-600 mb-1">
+                            المبلغ المخصص ({receiptCurrency})
+                          </label>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={alloc.allocated_amount}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setAllocations((prev) =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, allocated_amount: val } : row
+                                )
+                              );
+                            }}
+                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[#1e3a8a]"
+                          />
+                        </div>
+
+                        {isCross && (
+                          <>
+                            <div>
+                              <label className="block text-[11px] text-blue-700 mb-1 flex items-center gap-1">
+                                <RefreshCw className="w-3 h-3" />
+                                سعر الصرف ({receiptCurrency} / 1 {alloc.booking_currency})
+                              </label>
+                              <input
+                                type="number"
+                                min="0.0001"
+                                step="0.0001"
+                                value={alloc.ui_exchange_rate}
+                                onChange={(e) => {
+                                  const rate = parseFloat(e.target.value) || 1;
+                                  setAllocations((prev) =>
+                                    prev.map((row, i) =>
+                                      i === idx ? { ...row, ui_exchange_rate: rate } : row
+                                    )
+                                  );
+                                }}
+                                className="w-full rounded-lg border border-blue-300 bg-blue-50/40 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+                            <div className="flex flex-col justify-end">
+                              <div className="text-[11px] text-slate-500">المخصوم من التذكرة:</div>
+                              <div className="text-xs font-bold text-blue-800 bg-blue-50 px-2.5 py-1.5 rounded-lg border border-blue-100">
+                                {eqBooking.toLocaleString()} {alloc.booking_currency}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-xs">
+              <span>
+                المخصص للتذاكر:{' '}
+                <strong className="text-slate-900">
+                  {totalAllocated.toLocaleString()} {receiptCurrency}
+                </strong>
+              </span>
+              <span className={unallocatedSurplus < 0 ? 'text-red-600 font-bold' : 'text-emerald-700 font-bold'}>
+                {unallocatedSurplus < 0
+                  ? `تجاوز المبلغ بـ ${Math.abs(unallocatedSurplus).toLocaleString()} ${receiptCurrency}`
+                  : `الفائض (رصيد دائن للعميل): ${unallocatedSurplus.toLocaleString()} ${receiptCurrency}`}
+              </span>
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">

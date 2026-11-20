@@ -959,7 +959,8 @@ async def print_voucher(
     stmt = (
         select(FinancialTransaction)
         .where(FinancialTransaction.id == voucher_id)
-        .options(sil(FinancialTransaction.allocations))
+        .options(sil(FinancialTransaction.allocations).selectinload(VoucherAllocation.booking))
+        .execution_options(populate_existing=True)
     )
     res = await db.execute(stmt)
     tx = res.scalar_one_or_none()
@@ -985,6 +986,7 @@ async def print_voucher(
     allocations_data = [
         {
             "booking_id": alloc.booking_id,
+            "ticket_number": alloc.booking.ticket_number if getattr(alloc, "booking", None) else f"#{alloc.booking_id}",
             "allocated_amount": float(alloc.allocated_amount),
             "target_currency": alloc.target_currency.value if hasattr(alloc.target_currency, "value") else alloc.target_currency,
             "exchange_rate": float(alloc.exchange_rate),

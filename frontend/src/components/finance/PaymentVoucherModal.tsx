@@ -10,6 +10,7 @@ import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
 import { Select } from '../common/Select';
 import { Button } from '../common/Button';
+import { EntityAutocomplete } from './EntityAutocomplete';
 
 const paymentSchema = yup.object({
   entity_type: yup.string().oneOf(['customer', 'supplier']).required('نوع الجهة مطلوب'),
@@ -55,6 +56,7 @@ export function PaymentVoucherModal({
 
   const { register, watch, setValue, handleSubmit, reset, formState: { errors } } = form;
   const entityType = watch('entity_type');
+  const entityId = watch('entity_id');
 
   useEffect(() => {
     if (initialSupplierId) {
@@ -120,41 +122,23 @@ export function PaymentVoucherModal({
             label="نوع الجهة المصروف لها"
             required
             error={errors.entity_type?.message}
-            {...register('entity_type')}
+            {...register('entity_type', {
+              onChange: () => setValue('entity_id', undefined as any),
+            })}
           >
             <option value="supplier">مورد / شركة طيران أو نقل</option>
             <option value="customer">عميل (مستردات)</option>
           </Select>
 
-          {entityType === 'supplier' ? (
-            <Select
-              label="اختر المورد"
-              required
-              error={errors.entity_id?.message}
-              {...register('entity_id', { valueAsNumber: true })}
-            >
-              <option value="">-- اختر المورد --</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} (رصيد مستحق له: {Number(s.balance).toLocaleString()} YER)
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Select
-              label="اختر العميل"
-              required
-              error={errors.entity_id?.message}
-              {...register('entity_id', { valueAsNumber: true })}
-            >
-              <option value="">-- اختر العميل --</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          )}
+          <EntityAutocomplete
+            label={entityType === 'supplier' ? 'اختر المورد (بحث بالاسم)' : 'اختر العميل (بحث بالاسم أو الهاتف)'}
+            options={entityType === 'supplier' ? suppliers : customers}
+            value={entityId}
+            onChange={(id) => setValue('entity_id', id as any, { shouldValidate: true })}
+            required
+            showBalance={entityType === 'supplier'}
+            error={errors.entity_id?.message}
+          />
 
           <Input
             label="المبلغ المصروف"
