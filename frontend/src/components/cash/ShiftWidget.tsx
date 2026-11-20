@@ -97,6 +97,13 @@ export function ShiftWidget() {
       addToast('يجب إدخال النقدية الفعلية بالريال اليمني عند الجرد', 'error');
       return;
     }
+    const vYer = parseFloat(actualYer);
+    const vSar = parseFloat(actualSar || '0');
+    const vUsd = parseFloat(actualUsd || '0');
+    if (vYer < 0 || vSar < 0 || vUsd < 0) {
+      addToast('لا يمكن أن تكون النقدية الفعلية سالبة؛ أدخل 0 أو قيمة موجبة', 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await api.post('/finance/shifts/close', {

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -172,8 +173,9 @@ async def custom_http_exception_handler(request: Request, exc: StarletteHTTPExce
 @app.exception_handler(RequestValidationError)
 async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    api_logger.warning(f"[{ts}] HTTP 422 Validation Error on {request.method} {request.url.path} -> {exc.errors()}")
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    safe_errors = jsonable_encoder(exc.errors())
+    api_logger.warning(f"[{ts}] HTTP 422 Validation Error on {request.method} {request.url.path} -> {safe_errors}")
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
 @app.get("/api/health", tags=["Health"])
