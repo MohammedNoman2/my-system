@@ -1208,8 +1208,8 @@ async def reroute_booking(
 @router.get("/{id}/print")
 async def print_booking(
     id: int,
-    mode: str = Query("thermal", enum=["thermal", "a4"]),
-    format: str = Query("html", enum=["html", "pdf"]),
+    mode: str = Query("thermal", pattern="^(thermal|a4)$"),
+    format: str = Query("html", pattern="^(html|pdf)$"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

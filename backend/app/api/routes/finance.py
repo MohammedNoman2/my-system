@@ -948,7 +948,7 @@ async def search_vouchers(
 @router.get("/voucher/{voucher_id}/print")
 async def print_voucher(
     voucher_id: int,
-    mode: str = Query("thermal", enum=["thermal", "a4"]),
+    mode: str = Query("thermal", pattern="^(thermal|a4)$"),
     current_user: User = Depends(require_accountant_or_admin),
     db: AsyncSession = Depends(get_db),
 ):

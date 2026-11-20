@@ -24,7 +24,7 @@ jobs:
           pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - name: Run unified pytest verification suite
         working-directory: backend
-        run: pytest tests/test_stage4_and_5a1_suite.py -v
+        run: pytest -v
 
   frontend-build:
     runs-on: ubuntu-latest
