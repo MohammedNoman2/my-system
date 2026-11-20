@@ -168,5 +168,8 @@
 - **توافق مع FastAPI الحديثة**: استبدال معامل `Query(..., enum=...)` المتقادم بـ `Query(..., pattern=...)` في مسار طباعة الحجز `print_booking` بملف `bookings.py` ومسار طباعة السند `print_voucher` بملف `finance.py`.
 - **تفعيل الفحص الكامل في CI**: تحديث `.github/workflows/ci.yml` لتشغيل كامل حزمة `pytest -v` (16 اختباراً) بدلاً من قصرها على ملف اختبار واحد.
 
+## Security Update: Frontend Dependencies Patch (Dependabot Alerts Resolution)
+- **إغلاق 9 تنبيهات أمنية في الواجهة الأمامية**: تحديث `vite` إلى `>=6.4.4` وفرض ترقية `follow-redirects` إلى `>=1.16.2` و `source-map-js` إلى `>=1.2.2` عبر `overrides` في `package.json` مع تحديث `package-lock.json` واجتياز فحص `tsc` وبناء `npm run build` بنجاح كامل.
+
 
 
