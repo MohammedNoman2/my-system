@@ -27,13 +27,14 @@ from app.core.config import office_today
 from app.core.database import Base
 from app.models.booking import BookingType
 from app.models.exchange_rate import ExchangeRate
-from app.models.financial import PaymentMethod
+from sqlalchemy import select
+from app.models.financial import FinancialTransaction, PaymentMethod
 from app.models.user import User, UserRole
 from app.schemas.booking import BookingCreate, VisaDetailCreate
 from app.schemas.financial import ExpenseCreate
 from app.schemas.report import ReportFilter
 from app.api.routes.bookings import create_booking
-from app.api.routes.finance import create_expense
+from app.api.routes.finance import VoidVoucherRequest, create_expense, void_voucher
 from app.api.routes.reports import build_report
 from app.api.routes.settings import PeriodLockUpdate, get_period_lock, update_period_lock
 from app.services.accounting_service import init_chart_of_accounts
@@ -193,6 +194,8 @@ async def _run_5a4_period_lock_and_reconciliation():
             )
         assert exc_info.value.status_code == 400
         assert "مغلقة" in exc_info.value.detail
+        await db.rollback()
+        await db.refresh(admin)
 
         # 4. Expense dated today (open) succeeds
         await create_expense(
@@ -241,6 +244,29 @@ async def _run_5a4_period_lock_and_reconciliation():
         assert by_code["1101-YER"]["الصافي"] == 3300.0
         assert by_code["1102-SAR"]["الوارد"] == 500.0
         assert by_code["1102-SAR"]["الصادر"] == 0.0
+
+        # 7. Voiding a voucher dated inside a locked period must fail with HTTP 400
+        yest_tx = (
+            await db.execute(
+                select(FinancialTransaction).where(FinancialTransaction.transaction_date == yesterday)
+            )
+        ).scalar_one()
+        await update_period_lock(
+            data=PeriodLockUpdate(accounting_lock_date=yesterday),
+            request=req,
+            current_user=admin,
+            db=db,
+        )
+        with pytest.raises(HTTPException) as void_exc:
+            await void_voucher(
+                voucher_id=yest_tx.id,
+                data=VoidVoucherRequest(void_reason="اختبار منع إلغاء سند في فترة مقفلة"),
+                request=req,
+                current_user=admin,
+                db=db,
+            )
+        assert void_exc.value.status_code == 400
+        assert "مغلقة" in void_exc.value.detail
 
     await engine.dispose()
 

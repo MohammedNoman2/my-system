@@ -21,6 +21,8 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "cash_shifts" not in inspector.get_table_names():
+        return
     existing_cols = [c["name"] for c in inspector.get_columns("cash_shifts")]
     new_columns = [
         ("starting_balance_sar", sa.Column("starting_balance_sar", sa.Numeric(18, 4), nullable=False, server_default="0.0000")),

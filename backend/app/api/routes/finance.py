@@ -751,7 +751,7 @@ async def void_voucher(
         raise HTTPException(status_code=400,
             detail=f"السند {voucher.transaction_id} ملغى مسبقاً في {voucher.voided_at}")
 
-    await assert_period_open(db)
+    await assert_period_open(db, voucher.transaction_date)
 
     # ─── Reverse Booking Allocations ────────────────────────────────────
     for alloc in voucher.allocations:
