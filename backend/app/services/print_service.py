@@ -272,8 +272,8 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
         logo_content = f'<div style="font-size: 14px; font-weight: bold; color: #111827; text-align: center;">{office_settings.office_name}</div>'
 
     is_thermal = (mode == "thermal")
-    container_width = "615px" if is_thermal else "280mm"
-    container_padding = "10px" if is_thermal else "20px"
+    container_width = "76mm" if is_thermal else "280mm"
+    container_padding = "2mm" if is_thermal else "20px"
 
     html = f"""<!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -283,8 +283,8 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
     <style>
         {_font_face_css()}
         @page {{
-            size: {'615px 400px' if is_thermal else 'A4 landscape'};
-            margin: {'4mm' if is_thermal else '10mm'};
+            size: {'80mm 60mm' if is_thermal else 'A4 landscape'};
+            margin: {'2mm' if is_thermal else '10mm'};
         }}
         * {{
             box-sizing: border-box;
@@ -295,7 +295,7 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
             padding: 0;
             background: #ffffff;
             direction: rtl;
-            font-size: 12px;
+            font-size: {'9px' if is_thermal else '12px'};
             color: #111827;
         }}
         .voucher-container {{

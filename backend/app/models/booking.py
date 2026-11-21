@@ -82,6 +82,7 @@ class Booking(Base, TimestampMixin):
 
     flight_details = relationship("FlightBookingDetail", back_populates="booking", uselist=False, cascade="all, delete-orphan")
     transport_details = relationship("TransportBookingDetail", back_populates="booking", uselist=False, cascade="all, delete-orphan")
+    transport_infants = relationship("TransportInfant", back_populates="booking", cascade="all, delete-orphan")
     visa_details = relationship("VisaBookingDetail", back_populates="booking", uselist=False, cascade="all, delete-orphan")
     passport_details = relationship("PassportBookingDetail", back_populates="booking", uselist=False, cascade="all, delete-orphan")
     parcel_details = relationship("ParcelBookingDetail", back_populates="booking", uselist=False, cascade="all, delete-orphan")

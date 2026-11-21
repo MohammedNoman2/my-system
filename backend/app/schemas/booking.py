@@ -63,6 +63,31 @@ class FlightDetailCreate(BaseModel):
         return self
 
 
+VALID_TRANSPORT_ID_TYPES = {"passport", "national_id", "birth_certificate"}
+
+
+class TransportInfantCreate(BaseModel):
+    full_name: str
+    id_type: str = "birth_certificate"
+    id_number: Optional[str] = ""
+    birth_date: date
+
+    @model_validator(mode="after")
+    def _validate_infant(self) -> "TransportInfantCreate":
+        self.full_name = re.sub(r"\s+", " ", (self.full_name or "").strip())
+        if not self.full_name:
+            raise ValueError("اسم الرضيع مطلوب")
+        if self.id_type not in VALID_TRANSPORT_ID_TYPES:
+            raise ValueError("نوع هوية الرضيع غير صالح")
+        doc = (self.id_number or "").strip()
+        if self.id_type == "passport" and not re.fullmatch(r"[A-Za-z0-9]{8}", doc):
+            raise ValueError("رقم جواز الرضيع يجب أن يتكون من 8 خانات")
+        elif self.id_type == "national_id" and not re.fullmatch(r"\d{11}", doc):
+            raise ValueError("رقم البطاقة الشخصية للرضيع يجب أن يتكون من 11 رقماً")
+        self.id_number = doc
+        return self
+
+
 class TransportDetailCreate(BaseModel):
     transport_company: str
     departure_station: str
@@ -70,19 +95,70 @@ class TransportDetailCreate(BaseModel):
     travel_date: date
     travel_time: time
     # NO seat_number per specification
-    passenger_name: str
+    passenger_name: Optional[str] = None
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     passenger_phone: str
-    id_number: str
+    id_type: Optional[str] = None
+    id_number: Optional[str] = ""
     birth_date: date
     birth_place: str
     id_image_url: Optional[str] = None
+    infants: List[TransportInfantCreate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _clean_fields(self) -> "TransportDetailCreate":
-        self.passenger_name = re.sub(r"\s+", " ", self.passenger_name.strip())
+        fm = re.sub(r"\s+", " ", (self.first_middle_name or "").strip())
+        ln = re.sub(r"\s+", " ", (self.last_name or "").strip())
+        if fm or ln:
+            if not fm or len(fm.split(" ")) != 3:
+                raise ValueError("الاسم الثلاثي للمسافر يجب أن يتكون من 3 أسماء بالضبط")
+            if not ln:
+                raise ValueError("لقب المسافر مطلوب")
+            self.first_middle_name = fm
+            self.last_name = ln
+            self.passenger_name = f"{fm} {ln}".strip()
+        else:
+            pn = re.sub(r"\s+", " ", (self.passenger_name or "").strip())
+            if not pn:
+                raise ValueError("اسم المسافر مطلوب")
+            self.passenger_name = pn
+
         self.passenger_phone = validate_clean_phone(self.passenger_phone, "هاتف الراكب")
-        self.id_number = validate_clean_doc_number(self.id_number, "رقم الهوية")
+
+        doc = (self.id_number or "").strip()
+        if self.id_type is not None:
+            if self.id_type not in VALID_TRANSPORT_ID_TYPES:
+                raise ValueError("نوع الهوية غير صالح")
+            if self.id_type == "passport":
+                if not re.fullmatch(r"[A-Za-z0-9]{8}", doc):
+                    raise ValueError("رقم جواز السفر يجب أن يتكون من 8 خانات بالضبط")
+            elif self.id_type == "national_id":
+                if not re.fullmatch(r"\d{11}", doc):
+                    raise ValueError("رقم البطاقة الشخصية يجب أن يتكون من 11 رقماً بالضبط")
+            elif self.id_type == "birth_certificate":
+                if doc:
+                    doc = validate_clean_doc_number(doc, "رقم شهادة الميلاد")
+            self.id_number = doc
+        else:
+            self.id_number = validate_clean_doc_number(doc, "رقم الهوية")
         return self
+
+
+class TransportBatchCreate(BaseModel):
+    """إنشاء عدة مقاعد نقل بري في عملية واحدة (تذكرة مستقلة لكل راكب + سند قبض واحد موزع)."""
+    customer_id: Optional[int] = None
+    cost_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    selling_price: Decimal = Field(gt=0)
+    paid_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    currency: str = "YER"
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    notes: Optional[str] = None
+    use_credit_balance: bool = True
+    payment_method: PaymentMethod = PaymentMethod.CASH
+    reference_number: Optional[str] = None
+    passengers: List[TransportDetailCreate] = Field(min_length=1)
 
 
 class VisaDetailCreate(BaseModel):
@@ -224,6 +300,17 @@ class FlightDetailResponse(BaseModel):
         from_attributes = True
 
 
+class TransportInfantResponse(BaseModel):
+    id: int
+    full_name: str
+    id_type: str
+    id_number: str
+    birth_date: date
+
+    class Config:
+        from_attributes = True
+
+
 class TransportDetailResponse(BaseModel):
     transport_company: str
     departure_station: str
@@ -231,7 +318,10 @@ class TransportDetailResponse(BaseModel):
     travel_date: date
     travel_time: time
     passenger_name: str
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     passenger_phone: str
+    id_type: Optional[str] = "national_id"
     id_number: str
     birth_date: date
     birth_place: str

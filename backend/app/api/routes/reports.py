@@ -73,6 +73,7 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
                 selectinload(Booking.customer),
                 selectinload(Booking.employee),
                 selectinload(Booking.supplier),
+                selectinload(Booking.transport_infants),
             )
             .order_by(Booking.booking_date.desc())
         )
@@ -109,6 +110,11 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
                 "المدفوع": float(b.paid_amount),
                 "المتبقي": float(b.remaining_amount),
                 "الحالة": STATUS_LABELS.get(st_val, st_val),
+                "الرضّع المرافقون": (
+                    f"{len(b.transport_infants)} ({'، '.join(inf.full_name for inf in b.transport_infants)})"
+                    if getattr(b, "transport_infants", None)
+                    else "لا يوجد"
+                ),
             }
             if current_user.role != UserRole.EMPLOYEE:
                 row["سعر التكلفة"] = float(b.cost_price)

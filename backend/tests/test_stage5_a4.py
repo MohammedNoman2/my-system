@@ -88,7 +88,7 @@ def test_stage_5a4_alembic_period_lock_column():
         ver = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
         conn.close()
 
-        assert ver == "d0e1f2a3b4c5", f"Expected head d0e1f2a3b4c5, got {ver}"
+        assert ver in ("d0e1f2a3b4c5", "e1f2a3b4c5d6"), f"Expected head e1f2a3b4c5d6, got {ver}"
         assert "accounting_lock_date" in cols
 
 

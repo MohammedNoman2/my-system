@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from app.models.booking_details import (
     ParcelBookingDetail,
     PassportBookingDetail,
     TransportBookingDetail,
+    TransportInfant,
     VisaBookingDetail,
 )
 from app.models.customer import Customer
@@ -31,6 +32,7 @@ from app.schemas.booking import (
     BookingRerouteRequest,
     TicketSearchItem,
     TicketSearchResponse,
+    TransportBatchCreate,
 )
 from app.services.counter_service import get_next_reference_number
 from app.services.print_service import generate_voucher_html, generate_voucher_pdf
@@ -86,13 +88,14 @@ def check_employee_24h_window(booking: Booking, current_user: User, action_label
             )
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_booking(
+async def _create_booking_core(
     data: BookingCreate,
     request: Request,
-    current_user: User = Depends(require_booking_role),
-    db: AsyncSession = Depends(get_db),
-):
+    current_user: User,
+    db: AsyncSession,
+    *,
+    commit: bool = True,
+) -> Booking:
     # Determine reference prefix and generate next reference number atomically
     prefix = PREFIX_MAP.get(data.type, "BK")
     ref_num = await get_next_reference_number(db, prefix)
@@ -337,13 +340,24 @@ async def create_booking(
             travel_date=data.transport_details.travel_date,
             travel_time=data.transport_details.travel_time,
             passenger_name=data.transport_details.passenger_name,
+            first_middle_name=data.transport_details.first_middle_name,
+            last_name=data.transport_details.last_name,
             passenger_phone=data.transport_details.passenger_phone,
-            id_number=data.transport_details.id_number,
+            id_type=data.transport_details.id_type or "national_id",
+            id_number=data.transport_details.id_number or "",
             birth_date=data.transport_details.birth_date,
             birth_place=data.transport_details.birth_place,
             id_image_url=data.transport_details.id_image_url,
         )
         db.add(td)
+        for inf in getattr(data.transport_details, "infants", []) or []:
+            db.add(TransportInfant(
+                booking_id=booking.id,
+                full_name=inf.full_name,
+                id_type=inf.id_type,
+                id_number=inf.id_number or "",
+                birth_date=inf.birth_date,
+            ))
 
     elif data.type == BookingType.VISA:
         if not data.visa_details:
@@ -488,7 +502,21 @@ async def create_booking(
         request=request,
     )
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
+    return booking
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def create_booking(
+    data: BookingCreate,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    booking = await _create_booking_core(data, request, current_user, db, commit=True)
 
     # Re-fetch with relationships for output
     stmt = (
@@ -509,6 +537,189 @@ async def create_booking(
     full_booking = res.scalar_one()
 
     return format_booking_response(full_booking, current_user.role)
+
+
+@router.post("/transport-batch", status_code=status.HTTP_201_CREATED)
+async def create_transport_batch(
+    data: TransportBatchCreate,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    إنشاء عدة مقاعد نقل بري دفعة واحدة ذرّية بالكامل (Atomic Transaction):
+    - تذكرة مستقلة (TR-XXXX) وقيد استحقاق (BOOKING) مستقل لكل مسافر.
+    - فحص سقف المدفوع مقابل مجموع المتبقي الفعلي بعد خصم الرصيد الدائن.
+    - سند قبض واحد (RC-XXXX) وقيد قبض واحد (RECEIPT) لإجمالي المدفوع،
+      موزع بالتساوي عبر VoucherAllocation (مع سقف remaining_amount لكل مقعد وكسر التقريب على الأخير).
+    """
+    from decimal import ROUND_DOWN
+    from app.models.voucher_allocation import VoucherAllocation
+    from app.models.accounting import AccountCurrency
+
+    n_seats = len(data.passengers)
+    curr_str = (data.currency or "YER").upper()
+    selling_per_seat = Decimal(str(data.selling_price)).quantize(Decimal("0.01"))
+    cost_per_seat = (
+        Decimal("0.00")
+        if current_user.role == UserRole.EMPLOYEE
+        else Decimal(str(data.cost_price or 0)).quantize(Decimal("0.01"))
+    )
+    total_paid = Decimal(str(data.paid_amount or 0)).quantize(Decimal("0.01"))
+
+    # 1. Create each TR booking atomically (commit=False) with paid_amount=0 first
+    created_bookings: List[Booking] = []
+    for p_detail in data.passengers:
+        single_req = BookingCreate(
+            type=BookingType.TRANSPORT,
+            customer_id=data.customer_id,
+            cost_price=cost_per_seat,
+            selling_price=selling_per_seat,
+            paid_amount=Decimal("0.00"),
+            currency=curr_str,
+            supplier_id=data.supplier_id,
+            supplier_name=data.supplier_name,
+            notes=data.notes,
+            use_credit_balance=data.use_credit_balance,
+            payment_method=data.payment_method,
+            reference_number=data.reference_number,
+            transport_details=p_detail,
+        )
+        bk = await _create_booking_core(
+            data=single_req,
+            request=request,
+            current_user=current_user,
+            db=db,
+            commit=False,
+        )
+        created_bookings.append(bk)
+
+    # 2. Validate total_paid against actual total_remaining AFTER credit_balance consumption
+    total_remaining = sum(
+        (Decimal(str(b.remaining_amount)) for b in created_bookings),
+        Decimal("0.00"),
+    ).quantize(Decimal("0.01"))
+    if total_paid > total_remaining:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"إجمالي المدفوع ({total_paid}) يتجاوز إجمالي المتبقي بعد الرصيد الدائن ({total_remaining})",
+        )
+
+    # 3. If total_paid > 0, issue ONE single Receipt Voucher (RC) distributed across remaining_amount
+    rc_ref = None
+    if total_paid > Decimal("0.00"):
+        pm_val = data.payment_method or PaymentMethod.CASH
+        ref_doc = (data.reference_number or "").strip() or None
+        active_shift = (
+            await get_active_shift(db, current_user.id, raise_if_none=False)
+            if pm_val == PaymentMethod.CASH
+            else None
+        )
+        channel_acc = await get_payment_channel_account(db, pm_val, curr_str)
+        rc_ref = await get_next_reference_number(db, "RC")
+
+        primary_cust = await db.get(Customer, created_bookings[0].customer_id)
+        ticket_list_str = "، ".join(b.ticket_number for b in created_bookings)
+
+        # Equal distribution capped at each booking's remaining_amount; redistribute any leftover
+        rem_caps = [Decimal(str(b.remaining_amount)).quantize(Decimal("0.01")) for b in created_bookings]
+        base_share = (total_paid / Decimal(n_seats)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        shares: List[Decimal] = [Decimal("0.00")] * n_seats
+        unassigned = total_paid
+        for idx in range(n_seats):
+            ideal = base_share if idx < n_seats - 1 else unassigned
+            take = min(ideal, rem_caps[idx], unassigned)
+            shares[idx] = take
+            unassigned = (unassigned - take).quantize(Decimal("0.01"))
+        if unassigned > Decimal("0.00"):
+            for idx in range(n_seats):
+                room = (rem_caps[idx] - shares[idx]).quantize(Decimal("0.01"))
+                if room > Decimal("0.00"):
+                    add_amt = min(room, unassigned)
+                    shares[idx] = (shares[idx] + add_amt).quantize(Decimal("0.01"))
+                    unassigned = (unassigned - add_amt).quantize(Decimal("0.01"))
+                if unassigned == Decimal("0.00"):
+                    break
+
+        rc_tx = FinancialTransaction(
+            transaction_id=rc_ref,
+            type=TransactionType.PAYMENT_IN,
+            entity_type=EntityType.CUSTOMER,
+            entity_id=primary_cust.id,
+            amount=total_paid,
+            currency=curr_str,
+            payment_method=pm_val,
+            reference_number=ref_doc,
+            notes=f"سند قبض موحد ({n_seats} مقاعد نقل بري: {ticket_list_str})",
+            transaction_date=office_today(),
+            booking_id=created_bookings[0].id,
+            created_by=current_user.id,
+            shift_id=active_shift.id if active_shift else None,
+        )
+        db.add(rc_tx)
+        await db.flush()
+
+        cust_acc_credits: Dict[int, Decimal] = {}
+        for bk, share in zip(created_bookings, shares):
+            if share <= Decimal("0.00"):
+                continue
+            alloc = VoucherAllocation(
+                voucher_id=rc_tx.id,
+                booking_id=bk.id,
+                allocated_amount=share,
+                target_currency=AccountCurrency(curr_str),
+                exchange_rate=Decimal("1.000000"),
+                allocated_in_booking_currency=share,
+            )
+            db.add(alloc)
+            bk.paid_amount = (Decimal(str(bk.paid_amount)) + share).quantize(Decimal("0.01"))
+            bk.remaining_amount = max(
+                Decimal("0.00"),
+                (Decimal(str(bk.selling_price)) - bk.paid_amount).quantize(Decimal("0.01")),
+            )
+            bk.status = (
+                BookingStatus.CONFIRMED
+                if bk.paid_amount > Decimal("0.00")
+                else BookingStatus.PENDING
+            )
+            cust_acc_credits[bk.customer_id] = (
+                cust_acc_credits.get(bk.customer_id, Decimal("0.00")) + share
+            )
+
+        je_lines = [{"account_id": channel_acc.id, "debit": total_paid, "credit": Decimal("0.0000")}]
+        for cid, amt in cust_acc_credits.items():
+            c_obj = await db.get(Customer, cid)
+            c_acc = await get_entity_account(db, "customer", cid, curr_str, c_obj.name if c_obj else "")
+            je_lines.append({"account_id": c_acc.id, "debit": Decimal("0.0000"), "credit": amt})
+
+        rc_je_ref = await get_next_reference_number(db, "JE")
+        await create_journal_entry(
+            session=db,
+            entry_number=rc_je_ref,
+            reference_type="RECEIPT",
+            reference_id=rc_ref,
+            currency=curr_str,
+            description=f"سند قبض موحد {rc_ref} لـ {n_seats} مقاعد نقل بري ({ticket_list_str})",
+            lines_data=je_lines,
+        )
+
+        for cid in cust_acc_credits:
+            c_obj = await db.get(Customer, cid)
+            if c_obj:
+                c_obj.balance = await get_entity_balance(db, "customer", cid)
+
+    await db.commit()
+    for bk in created_bookings:
+        await db.refresh(bk)
+
+    return {
+        "count": len(created_bookings),
+        "ticket_numbers": [b.ticket_number for b in created_bookings],
+        "booking_ids": [b.id for b in created_bookings],
+        "receipt_id": rc_ref,
+        "total_paid": float(total_paid),
+    }
 
 
 @router.get("/unpaid")
