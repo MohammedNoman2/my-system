@@ -254,10 +254,30 @@ async def get_ledger_statement(
                         else:
                             desc_text = f"سند قبض {tx_obj.transaction_id} — سداد مخصص لحجز {t_no} ({credit:,.2f} {cur})"
                     elif getattr(tx_obj, "allocations", []):
-                        desc_text = (
-                            f"سند قبض {tx_obj.transaction_id} — فائض دفعة مقدمة "
-                            f"(رصيد دائن متاح تحت الحساب: {credit:,.2f} {cur})"
+                        allocs_in_curr = [
+                            a for a in tx_obj.allocations
+                            if (
+                                a.id not in used_alloc_ids
+                                and (a.target_currency.value if hasattr(a.target_currency, "value") else str(a.target_currency)).upper() == cur
+                            )
+                        ]
+                        total_alloc_curr = _q2(
+                            sum((Decimal(str(a.allocated_in_booking_currency)) for a in allocs_in_curr), Decimal("0.00"))
                         )
+                        if allocs_in_curr and total_alloc_curr >= credit:
+                            tickets_str = "، ".join(
+                                (a.booking.ticket_number if getattr(a, "booking", None) else f"#{a.booking_id}")
+                                for a in allocs_in_curr
+                            )
+                            desc_text = (
+                                f"سند قبض {tx_obj.transaction_id} — سداد مخصص للحجوزات ({tickets_str}) "
+                                f"({credit:,.2f} {cur})"
+                            )
+                        else:
+                            desc_text = (
+                                f"سند قبض {tx_obj.transaction_id} — فائض دفعة مقدمة "
+                                f"(رصيد دائن متاح تحت الحساب: {credit:,.2f} {cur})"
+                            )
 
                 period_entries.append(
                     {

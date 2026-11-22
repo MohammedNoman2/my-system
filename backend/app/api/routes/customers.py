@@ -179,6 +179,34 @@ async def update_customer(
         if nullable_key in update_dict and update_dict[nullable_key] is not None and not str(update_dict[nullable_key]).strip():
             update_dict[nullable_key] = None
 
+    # التحقق من عدم تكرار الهاتف أو الهوية أو الجواز لدى عميل آخر قبل الحفظ
+    if "phone_number" in update_dict and update_dict["phone_number"]:
+        dup_p = (
+            await db.execute(
+                select(Customer).where(Customer.phone_number == update_dict["phone_number"], Customer.id != id)
+            )
+        ).scalars().first()
+        if dup_p:
+            raise HTTPException(status_code=400, detail=f"رقم الهاتف مسجل مسبقاً لعميل آخر ({dup_p.name})")
+
+    if "id_number" in update_dict and update_dict["id_number"]:
+        dup_id = (
+            await db.execute(
+                select(Customer).where(Customer.id_number == update_dict["id_number"], Customer.id != id)
+            )
+        ).scalars().first()
+        if dup_id:
+            raise HTTPException(status_code=400, detail=f"رقم الهوية مسجل مسبقاً لعميل آخر ({dup_id.name})")
+
+    if "passport_number" in update_dict and update_dict["passport_number"]:
+        dup_pass = (
+            await db.execute(
+                select(Customer).where(Customer.passport_number == update_dict["passport_number"], Customer.id != id)
+            )
+        ).scalars().first()
+        if dup_pass:
+            raise HTTPException(status_code=400, detail=f"رقم الجواز مسجل مسبقاً لعميل آخر ({dup_pass.name})")
+
     for k, v in update_dict.items():
         setattr(customer, k, v)
 

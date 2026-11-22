@@ -266,8 +266,11 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
     rows = get_booking_rows(booking)
     table_html = build_field_table_html(rows)
 
-    if office_settings.logo_image_url and os.path.exists(office_settings.logo_image_url):
-        logo_content = f'<img src="{office_settings.logo_image_url}" style="max-width: 100%; max-height: 75px; object-fit: contain;" />'
+    logo_src = getattr(office_settings, "logo_data", None) or (
+        office_settings.logo_image_url if office_settings.logo_image_url and os.path.exists(office_settings.logo_image_url) else None
+    )
+    if logo_src:
+        logo_content = f'<img src="{logo_src}" style="max-width: 100%; max-height: 75px; object-fit: contain;" />'
     else:
         logo_content = f'<div style="font-size: 14px; font-weight: bold; color: #111827; text-align: center;">{office_settings.office_name}</div>'
 

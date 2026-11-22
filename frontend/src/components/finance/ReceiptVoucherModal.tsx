@@ -138,7 +138,7 @@ export function ReceiptVoucherModal({
     if (bCurr === vCurr) return 1;
     const targetInYer = ratesToYer[bCurr] || 1;
     const voucherInYer = ratesToYer[vCurr] || 1;
-    const r = Number((targetInYer / voucherInYer).toFixed(4));
+    const r = Number((targetInYer / voucherInYer).toFixed(6));
     return r > 0 ? r : 1;
   };
 
@@ -431,7 +431,7 @@ export function ReceiptVoucherModal({
                             <div className="flex flex-col justify-end">
                               <div className="text-[11px] text-slate-500">المخصوم من التذكرة:</div>
                               <div className="text-xs font-bold text-blue-800 bg-blue-50 px-2.5 py-1.5 rounded-lg border border-blue-100">
-                                {eqBooking.toLocaleString()} {alloc.booking_currency}
+                                {eqBooking.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {alloc.booking_currency}
                               </div>
                             </div>
                           </>
