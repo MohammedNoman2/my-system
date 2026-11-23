@@ -361,7 +361,17 @@ export function FlightBookingForm({ onSuccess, onCancel }: FlightBookingFormProp
 
         {currentStep === 2 && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            <CustomerSearch selectedCustomer={selectedCustomer} onSelectCustomer={handleCustomerSelect} />
+          <CustomerSearch
+            selectedCustomer={selectedCustomer}
+            onSelectCustomer={handleCustomerSelect}
+            onManualNameInput={(name) => {
+              const parts = name.trim().split(/\s+/).filter(Boolean);
+              updatePassenger(0, {
+                first_middle_name: parts.slice(0, 3).join(' '),
+                last_name: parts.slice(3).join(' '),
+              });
+            }}
+          />
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">

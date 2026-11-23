@@ -132,33 +132,46 @@ export function ReceiptVoucherModal({
     fetchBookings();
   }, [entityId, entityType]);
 
-  const computeUiRate = (bookingCurr: string, voucherCurr: string) => {
-    const bCurr = (bookingCurr || 'YER').toUpperCase();
+  const computeConversion = (amountInVoucherCurr: number, voucherCurr: string, bookingCurr: string) => {
     const vCurr = (voucherCurr || 'YER').toUpperCase();
-    if (bCurr === vCurr) return 1;
-    const targetInYer = ratesToYer[bCurr] || 1;
+    const bCurr = (bookingCurr || 'YER').toUpperCase();
+    if (vCurr === bCurr) return Number(amountInVoucherCurr.toFixed(2));
     const voucherInYer = ratesToYer[vCurr] || 1;
-    const r = Number((targetInYer / voucherInYer).toFixed(6));
-    return r > 0 ? r : 1;
+    const targetInYer = ratesToYer[bCurr] || 1;
+    return Number(((amountInVoucherCurr * voucherInYer) / targetInYer).toFixed(2));
   };
 
-  // إعادة حساب سعر الصرف التلقائي للتخصيصات عند تغيير عملة السند
-  useEffect(() => {
-    setAllocations((prev) =>
-      prev.map((a) => ({
-        ...a,
-        ui_exchange_rate: computeUiRate(a.booking_currency, receiptCurrency),
-      }))
-    );
-  }, [receiptCurrency, ratesToYer]);
+  const formatPairRateBadge = (voucherCurr: string, bookingCurr: string) => {
+    const vCurr = (voucherCurr || 'YER').toUpperCase();
+    const bCurr = (bookingCurr || 'YER').toUpperCase();
+    const voucherInYer = ratesToYer[vCurr] || 1;
+    const targetInYer = ratesToYer[bCurr] || 1;
+    if (voucherInYer >= targetInYer) {
+      const ratio = (voucherInYer / targetInYer).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+      return `1 ${vCurr} = ${ratio} ${bCurr}`;
+    }
+    const ratio = (targetInYer / voucherInYer).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return `1 ${bCurr} = ${ratio} ${vCurr}`;
+  };
 
   const handleAddAllocation = (bookingId: number) => {
+    if (!bookingId) return;
+    if (allocations.some((a) => a.booking_id === bookingId)) return;
     const b = unpaidBookings.find((item) => item.id === bookingId);
     if (!b) return;
-    if (allocations.some((a) => a.booking_id === bookingId)) return;
-
-    const uiRate = computeUiRate(b.currency, receiptCurrency);
-    const defaultNeededInReceiptCurr = Number((Number(b.remaining_amount) * uiRate).toFixed(2));
+    const bCurr = String(b.currency || 'YER').toUpperCase();
+    const vInYer = ratesToYer[receiptCurrency] || 1;
+    const bInYer = ratesToYer[bCurr] || 1;
+    const defaultNeededInReceiptCurr =
+      bCurr === receiptCurrency
+        ? Number(Number(b.remaining_amount).toFixed(2))
+        : Number(((Number(b.remaining_amount) * bInYer) / vInYer).toFixed(2));
     const remainingBudget = Math.max(0, Number((amount - totalAllocated).toFixed(2)));
     const initialAlloc = remainingBudget > 0 ? Math.min(defaultNeededInReceiptCurr, remainingBudget) : defaultNeededInReceiptCurr;
 
@@ -167,10 +180,10 @@ export function ReceiptVoucherModal({
       {
         booking_id: b.id,
         ticket_number: b.ticket_number,
-        booking_currency: String(b.currency || 'YER').toUpperCase(),
-        remaining_amount: Number(b.remaining_amount || 0),
+        remaining_amount: Number(b.remaining_amount),
+        booking_currency: bCurr,
         allocated_amount: initialAlloc,
-        ui_exchange_rate: uiRate,
+        ui_exchange_rate: Number((bInYer / vInYer).toFixed(6)),
       },
     ]);
   };
@@ -207,15 +220,10 @@ export function ReceiptVoucherModal({
         transaction_date: values.transaction_date,
         allocations: allocations
           .filter((a) => Number(a.allocated_amount) > 0)
-          .map((a) => {
-            const isCross = a.booking_currency !== String(values.currency).toUpperCase();
-            const rateToSend = isCross ? Number((1 / Number(a.ui_exchange_rate || 1)).toFixed(6)) : 1;
-            return {
-              booking_id: a.booking_id,
-              allocated_amount: Number(a.allocated_amount),
-              exchange_rate: rateToSend,
-            };
-          }),
+          .map((a) => ({
+            booking_id: a.booking_id,
+            allocated_amount: Number(Number(a.allocated_amount).toFixed(2)),
+          })),
       };
 
       const res = await api.post('/finance/receipt-voucher/v2', payload);
@@ -337,7 +345,7 @@ export function ReceiptVoucherModal({
                   <option value="">+ أضف تذكرة للتسوية...</option>
                   {availableToAdd.map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.ticket_number} — المتبقي: {Number(b.remaining_amount).toLocaleString()} {b.currency}
+                      {b.ticket_number} — المتبقي: {Number(b.remaining_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {b.currency}
                     </option>
                   ))}
                 </select>
@@ -354,9 +362,11 @@ export function ReceiptVoucherModal({
               <div className="space-y-2">
                 {allocations.map((alloc, idx) => {
                   const isCross = alloc.booking_currency !== receiptCurrency;
-                  const eqBooking = isCross
-                    ? Number((alloc.allocated_amount / (alloc.ui_exchange_rate || 1)).toFixed(2))
-                    : alloc.allocated_amount;
+                  const eqBooking = computeConversion(
+                    alloc.allocated_amount,
+                    receiptCurrency,
+                    alloc.booking_currency
+                  );
                   return (
                     <div
                       key={alloc.booking_id}
@@ -366,7 +376,7 @@ export function ReceiptVoucherModal({
                         <div className="text-xs font-bold text-slate-900">
                           {alloc.ticket_number}{' '}
                           <span className="font-normal text-slate-500">
-                            (المتبقي: {alloc.remaining_amount.toLocaleString()} {alloc.booking_currency})
+                            (المتبقي: {alloc.remaining_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {alloc.booking_currency})
                           </span>
                         </div>
                         <button
@@ -394,7 +404,7 @@ export function ReceiptVoucherModal({
                             step="0.01"
                             value={alloc.allocated_amount}
                             onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 0;
+                              const val = Number((parseFloat(e.target.value) || 0).toFixed(2));
                               setAllocations((prev) =>
                                 prev.map((row, i) =>
                                   i === idx ? { ...row, allocated_amount: val } : row
@@ -407,26 +417,14 @@ export function ReceiptVoucherModal({
 
                         {isCross && (
                           <>
-                            <div>
-                              <label className="block text-[11px] text-blue-700 mb-1 flex items-center gap-1">
+                            <div className="flex flex-col justify-end">
+                              <div className="text-[11px] text-blue-700 mb-1 flex items-center gap-1">
                                 <RefreshCw className="w-3 h-3" />
-                                سعر الصرف ({receiptCurrency} / 1 {alloc.booking_currency})
-                              </label>
-                              <input
-                                type="number"
-                                min="0.0001"
-                                step="0.0001"
-                                value={alloc.ui_exchange_rate}
-                                onChange={(e) => {
-                                  const rate = parseFloat(e.target.value) || 1;
-                                  setAllocations((prev) =>
-                                    prev.map((row, i) =>
-                                      i === idx ? { ...row, ui_exchange_rate: rate } : row
-                                    )
-                                  );
-                                }}
-                                className="w-full rounded-lg border border-blue-300 bg-blue-50/40 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              />
+                                سعر الصرف المعتمد (من الإعدادات):
+                              </div>
+                              <div className="text-xs font-semibold text-blue-900 bg-blue-50/70 px-2.5 py-1.5 rounded-lg border border-blue-200">
+                                {formatPairRateBadge(receiptCurrency, alloc.booking_currency)}
+                              </div>
                             </div>
                             <div className="flex flex-col justify-end">
                               <div className="text-[11px] text-slate-500">المخصوم من التذكرة:</div>
@@ -447,13 +445,13 @@ export function ReceiptVoucherModal({
               <span>
                 المخصص للتذاكر:{' '}
                 <strong className="text-slate-900">
-                  {totalAllocated.toLocaleString()} {receiptCurrency}
+                  {totalAllocated.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {receiptCurrency}
                 </strong>
               </span>
               <span className={unallocatedSurplus < 0 ? 'text-red-600 font-bold' : 'text-emerald-700 font-bold'}>
                 {unallocatedSurplus < 0
-                  ? `تجاوز المبلغ بـ ${Math.abs(unallocatedSurplus).toLocaleString()} ${receiptCurrency}`
-                  : `الفائض (رصيد دائن للعميل): ${unallocatedSurplus.toLocaleString()} ${receiptCurrency}`}
+                  ? `تجاوز المبلغ بـ ${Math.abs(unallocatedSurplus).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${receiptCurrency}`
+                  : `الفائض (رصيد دائن للعميل): ${unallocatedSurplus.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${receiptCurrency}`}
               </span>
             </div>
           </div>

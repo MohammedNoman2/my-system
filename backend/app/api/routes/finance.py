@@ -81,7 +81,8 @@ class CloseShiftRequest(BaseModel):
 class AllocationItem(BaseModel):
     booking_id: int
     allocated_amount: Decimal = Field(gt=0)
-    exchange_rate: Decimal = Field(default=Decimal("1.000000"), gt=0)
+    # حقل اختياري للتوافق الخلفي فقط — الخادم يتجاهله ويشتق السعر من إعدادات النظام دائماً
+    exchange_rate: Optional[Decimal] = Field(default=None, gt=0)
 
 
 class ReceiptVoucherV2Create(BaseModel):
@@ -443,10 +444,20 @@ async def create_receipt_voucher_v2(
             raise HTTPException(status_code=404, detail=f"الحجز #{alloc_item.booking_id} غير موجود")
 
         booking_currency = (booking.currency or "YER").upper()
-        # سعر الصرف: عملة السند → عملة الحجز (مع تقريب النتيجة إلى خانتين عشريتين P7)
-        rate = Decimal(str(alloc_item.exchange_rate))
+        voucher_currency = data.currency.upper()
         alloc_amt_2d = Decimal(str(alloc_item.allocated_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        allocated_in_booking_curr = (alloc_amt_2d * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        # اشتقاق سعر الصرف من إعدادات النظام على الخادم دائماً (حساب التحويل بدقة كاملة لتجنب أخطاء التقريب في المبالغ الكبيرة)
+        if voucher_currency == booking_currency:
+            rate = Decimal("1.000000")
+            allocated_in_booking_curr = alloc_amt_2d
+        else:
+            booking_rate_to_yer = await get_exchange_rate_to_yer(db, booking_currency)
+            rate = (voucher_rate_to_yer / booking_rate_to_yer).quantize(
+                Decimal("0.000001"), rounding=ROUND_HALF_UP
+            )
+            allocated_in_booking_curr = (
+                alloc_amt_2d * voucher_rate_to_yer / booking_rate_to_yer
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         rem_2d = Decimal(str(booking.remaining_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         # التحقق من عدم تجاوز المتبقي (مع معالجة فروق أجزاء السنت <= 0.05)
@@ -480,8 +491,9 @@ async def create_receipt_voucher_v2(
         db.add(alloc)
 
         if data.currency.upper() != booking_currency:
+            rate_str = f"{rate:.2f}" if rate >= Decimal("1") else f"{rate:.6f}"
             alloc_desc_parts.append(
-                f"حجز {booking.ticket_number}: {alloc_amt_2d} {data.currency.upper()} × {float(rate):g} = {allocated_in_booking_curr} {booking_currency}"
+                f"حجز {booking.ticket_number}: {alloc_amt_2d:.2f} {data.currency.upper()} × {rate_str} = {allocated_in_booking_curr:.2f} {booking_currency}"
             )
         else:
             alloc_desc_parts.append(

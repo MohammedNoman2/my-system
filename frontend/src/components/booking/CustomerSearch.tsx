@@ -8,12 +8,14 @@ interface CustomerSearchProps {
   selectedCustomer: Customer | null;
   onSelectCustomer: (customer: Customer | null) => void;
   onManualModeToggle?: (isManual: boolean) => void;
+  onManualNameInput?: (name: string) => void;
 }
 
 export function CustomerSearch({
   selectedCustomer,
   onSelectCustomer,
   onManualModeToggle,
+  onManualNameInput,
 }: CustomerSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Customer[]>([]);
@@ -114,8 +116,12 @@ export function CustomerSearch({
             <input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="ابحث بالاسم، رقم الهاتف، رقم الجواز أو البطاقة الشخصية..."
+              onChange={(e) => {
+                const val = e.target.value;
+                setQuery(val);
+                if (onManualNameInput && !/\d/.test(val)) onManualNameInput(val);
+              }}
+              placeholder="اكتب اسم العميل (أو ابحث بالهاتف/الجواز للاختيار التلقائي أو الإدخال اليدوي)..."
               className="w-full rounded-xl border border-slate-300 bg-white pr-10 pl-10 py-2.5 text-sm text-slate-900 transition-colors placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#1e3a8a] focus:border-transparent"
             />
             <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400">
@@ -152,10 +158,22 @@ export function CustomerSearch({
                   </button>
                 ))
               ) : (
-                <div className="p-4 text-center text-xs text-slate-500 flex flex-col items-center gap-1">
-                  <UserPlus className="w-5 h-5 text-slate-400" />
-                  <span>لم يتم العثور على عميل مطابق. يمكنك إدخال البيانات في الخطوة التالية وسيتم تسجيله تلقائياً.</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectCustomer(null);
+                    const trimmed = query.trim();
+                    if (onManualNameInput && !/\d/.test(trimmed)) onManualNameInput(trimmed);
+                    setIsOpen(false);
+                    if (onManualModeToggle) onManualModeToggle(true);
+                  }}
+                  className="w-full p-3 text-right text-xs text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 transition-colors"
+                >
+                  <UserPlus className="w-4 h-4 shrink-0" />
+                  <span>
+                    استخدام <strong>«{query.trim()}»</strong> كعميل جديد (إدخال يدوي في الخطوة التالية)
+                  </span>
+                </button>
               )}
             </div>
           )}

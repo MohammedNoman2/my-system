@@ -140,7 +140,7 @@ async def run_stage_4c_verification():
         assert sar_ledger_1["closing_balance"] == 100.0
         assert sar_ledger_1["closing_balance_label"] == "عليه (مدين)"
 
-        # 2. Test P7 Cross-Currency Receipt Voucher V2 (187 SAR -> 100 SAR to VI + 77 SAR @ 0.2666 to FL + 10 SAR unallocated)
+        # 2. Test P7 Cross-Currency Receipt Voucher V2 (187 SAR -> 100 SAR to VI + 77 SAR to FL (server-derived rate) + 10 SAR unallocated)
         rc_v2 = await create_receipt_voucher_v2(
             data=ReceiptVoucherV2Create(
                 entity_type=EntityType.CUSTOMER,
@@ -168,16 +168,16 @@ async def run_stage_4c_verification():
         assert rc_v2["unallocated_balance"] == 10.0
 
         fl_booking = await db.get(Booking, fl_id)
-        # 77 * 0.2666 = 20.5282 -> rounded to 20.53 USD! Remaining = 55 - 20.53 = 34.47 USD!
-        assert Decimal(str(fl_booking.paid_amount)) == Decimal("600.53"), f"Got {fl_booking.paid_amount}"
-        assert Decimal(str(fl_booking.remaining_amount)) == Decimal("34.47"), f"Got {fl_booking.remaining_amount}"
+        # الخادم يتجاهل exchange_rate=0.2666 المرسل ويشتق المعامل من الإعدادات: 77 * 140 / 530 = 20.3396 -> 20.34 USD. المتبقي = 55 - 20.34 = 34.66 USD
+        assert Decimal(str(fl_booking.paid_amount)) == Decimal("600.34"), f"Got {fl_booking.paid_amount}"
+        assert Decimal(str(fl_booking.remaining_amount)) == Decimal("34.66"), f"Got {fl_booking.remaining_amount}"
 
         st_after = await get_ledger_statement(db, "customer", cust_id)
         usd_ledger = st_after["ledgers"]["USD"]
         assert usd_ledger["total_debit"] == 635.0
-        assert usd_ledger["total_credit"] == 600.53
-        assert usd_ledger["closing_balance"] == 34.47
-        assert any("77.00 SAR" in e["description"] and "20.53 USD" in e["description"] for e in usd_ledger["entries"]), (
+        assert usd_ledger["total_credit"] == 600.34
+        assert usd_ledger["closing_balance"] == 34.66
+        assert any("77.00 SAR" in e["description"] and "20.34 USD" in e["description"] for e in usd_ledger["entries"]), (
             f"Missing cross-currency detail in USD ledger: {usd_ledger['entries']}"
         )
 

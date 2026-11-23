@@ -202,10 +202,13 @@ export function ParcelBookingForm({ onSuccess, onCancel }: ParcelBookingFormProp
         {/* Step 2: Sender & Receiver details (No OCR for parcels) */}
         {currentStep === 2 && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            <CustomerSearch
-              selectedCustomer={selectedCustomer}
-              onSelectCustomer={handleCustomerSelect}
-            />
+          <CustomerSearch
+            selectedCustomer={selectedCustomer}
+            onSelectCustomer={handleCustomerSelect}
+            onManualNameInput={(name) => {
+              setValue('sender_name', name, { shouldValidate: true });
+            }}
+          />
 
             <div className="pt-2 border-t border-slate-100">
               <h4 className="text-sm font-bold text-slate-800 mb-4">بيانات أطراف الشحنة</h4>
