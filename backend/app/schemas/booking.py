@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field, model_validator
 from app.models.booking import BookingStatus, BookingType
 from app.models.booking_details.flight import FlightTicketType
@@ -36,6 +36,43 @@ def validate_clean_doc_number(val: str, field_label: str = "رقم الوثيق�
     return cleaned
 
 
+VALID_FLIGHT_CATEGORIES = {"adult", "child", "infant"}
+
+
+def compute_flight_passenger_category(birth_date: date, departure_date: date) -> str:
+    """حساب فئة مسافر الطيران تلقائياً من تاريخ الميلاد مقارنةً بتاريخ السفر."""
+    age_years = (
+        departure_date.year
+        - birth_date.year
+        - ((departure_date.month, departure_date.day) < (birth_date.month, birth_date.day))
+    )
+    if age_years < 2:
+        return "infant"
+    if age_years < 12:
+        return "child"
+    return "adult"
+
+
+def _resolve_3part_name(
+    first_middle_name: Optional[str],
+    last_name: Optional[str],
+    full_name: Optional[str],
+    entity_label: str = "المسافر",
+) -> Tuple[Optional[str], Optional[str], str]:
+    fm = re.sub(r"\s+", " ", (first_middle_name or "").strip())
+    ln = re.sub(r"\s+", " ", (last_name or "").strip())
+    if fm or ln:
+        if not fm or len(fm.split(" ")) != 3:
+            raise ValueError(f"الاسم الثلاثي لـ{entity_label} يجب أن يتكون من 3 أسماء بالضبط")
+        if not ln:
+            raise ValueError(f"لقب {entity_label} مطلوب")
+        return fm, ln, f"{fm} {ln}".strip()
+    pn = re.sub(r"\s+", " ", (full_name or "").strip())
+    if not pn:
+        raise ValueError(f"اسم {entity_label} مطلوب")
+    return None, None, pn
+
+
 # Detail Creation Schemas
 class FlightDetailCreate(BaseModel):
     airline_company: str
@@ -48,7 +85,10 @@ class FlightDetailCreate(BaseModel):
     return_time: Optional[time] = None
     ticket_type: FlightTicketType = FlightTicketType.ONEWAY
     allowed_weight: Optional[Decimal] = None
-    passenger_name: str
+    passenger_name: Optional[str] = None
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    passenger_category: Optional[str] = None
     passenger_phone: str
     passport_number: str
     birth_date: date
@@ -57,9 +97,17 @@ class FlightDetailCreate(BaseModel):
 
     @model_validator(mode="after")
     def _clean_fields(self) -> "FlightDetailCreate":
-        self.passenger_name = re.sub(r"\s+", " ", self.passenger_name.strip())
+        fm, ln, full = _resolve_3part_name(
+            self.first_middle_name, self.last_name, self.passenger_name, "المسافر"
+        )
+        self.first_middle_name = fm
+        self.last_name = ln
+        self.passenger_name = full
         self.passenger_phone = validate_clean_phone(self.passenger_phone, "هاتف المسافر")
         self.passport_number = validate_clean_doc_number(self.passport_number, "رقم الجواز")
+        self.passenger_category = compute_flight_passenger_category(
+            self.birth_date, self.departure_date
+        )
         return self
 
 
@@ -165,7 +213,9 @@ class VisaDetailCreate(BaseModel):
     visa_type: str
     # NO country, expected_issue_date, duration per specification
     application_date: date
-    applicant_name: str
+    applicant_name: Optional[str] = None
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     applicant_phone: str
     passport_number: str
     birth_date: date
@@ -174,7 +224,12 @@ class VisaDetailCreate(BaseModel):
 
     @model_validator(mode="after")
     def _clean_fields(self) -> "VisaDetailCreate":
-        self.applicant_name = re.sub(r"\s+", " ", self.applicant_name.strip())
+        fm, ln, full = _resolve_3part_name(
+            self.first_middle_name, self.last_name, self.applicant_name, "المتقدم"
+        )
+        self.first_middle_name = fm
+        self.last_name = ln
+        self.applicant_name = full
         self.applicant_phone = validate_clean_phone(self.applicant_phone, "هاتف المتقدم")
         self.passport_number = validate_clean_doc_number(self.passport_number, "رقم الجواز")
         return self
@@ -185,7 +240,9 @@ class PassportDetailCreate(BaseModel):
     priority: PassportPriority = PassportPriority.NORMAL
     application_date: date
     expected_delivery_date: Optional[date] = None
-    applicant_name: str
+    applicant_name: Optional[str] = None
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     applicant_phone: str
     id_number: str
     birth_date: date
@@ -194,10 +251,41 @@ class PassportDetailCreate(BaseModel):
 
     @model_validator(mode="after")
     def _clean_fields(self) -> "PassportDetailCreate":
-        self.applicant_name = re.sub(r"\s+", " ", self.applicant_name.strip())
+        fm, ln, full = _resolve_3part_name(
+            self.first_middle_name, self.last_name, self.applicant_name, "المتقدم"
+        )
+        self.first_middle_name = fm
+        self.last_name = ln
+        self.applicant_name = full
         self.applicant_phone = validate_clean_phone(self.applicant_phone, "هاتف المتقدم")
         self.id_number = validate_clean_doc_number(self.id_number, "رقم الهوية")
         return self
+
+
+class BookingBatchItem(BaseModel):
+    flight_details: Optional[FlightDetailCreate] = None
+    transport_details: Optional[TransportDetailCreate] = None
+    visa_details: Optional[VisaDetailCreate] = None
+    passport_details: Optional[PassportDetailCreate] = None
+
+
+class BookingBatchCreate(BaseModel):
+    """إنشاء عدة حجوزات في القطاعات الأربعة (طيران، نقل بري، تأشيرات، جوازات) بسند قبض موحد."""
+    type: BookingType
+    customer_id: Optional[int] = None
+    cost_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    selling_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    category_prices: Optional[Dict[str, Decimal]] = None
+    category_costs: Optional[Dict[str, Decimal]] = None
+    paid_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    currency: str = "YER"
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    notes: Optional[str] = None
+    use_credit_balance: bool = True
+    payment_method: PaymentMethod = PaymentMethod.CASH
+    reference_number: Optional[str] = None
+    items: List[BookingBatchItem] = Field(min_length=1)
 
 
 class ParcelDetailCreate(BaseModel):
@@ -290,6 +378,9 @@ class FlightDetailResponse(BaseModel):
     ticket_type: FlightTicketType
     allowed_weight: Optional[Decimal] = None
     passenger_name: str
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    passenger_category: Optional[str] = "adult"
     passenger_phone: str
     passport_number: str
     birth_date: date
@@ -335,6 +426,8 @@ class VisaDetailResponse(BaseModel):
     visa_type: str
     application_date: date
     applicant_name: str
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     applicant_phone: str
     passport_number: str
     birth_date: date
@@ -351,6 +444,8 @@ class PassportDetailResponse(BaseModel):
     application_date: date
     expected_delivery_date: Optional[date] = None
     applicant_name: str
+    first_middle_name: Optional[str] = None
+    last_name: Optional[str] = None
     applicant_phone: str
     id_number: str
     birth_date: date

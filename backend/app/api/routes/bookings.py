@@ -25,6 +25,7 @@ from app.models.settings import Settings
 from app.models.user import User, UserRole
 from app.schemas.booking import (
     BookingAdminResponse,
+    BookingBatchCreate,
     BookingCancelRequest,
     BookingCreate,
     BookingEmployeeResponse,
@@ -321,6 +322,9 @@ async def _create_booking_core(
             ticket_type=data.flight_details.ticket_type,
             allowed_weight=data.flight_details.allowed_weight,
             passenger_name=data.flight_details.passenger_name,
+            first_middle_name=data.flight_details.first_middle_name,
+            last_name=data.flight_details.last_name,
+            passenger_category=data.flight_details.passenger_category or "adult",
             passenger_phone=data.flight_details.passenger_phone,
             passport_number=data.flight_details.passport_number,
             birth_date=data.flight_details.birth_date,
@@ -367,6 +371,8 @@ async def _create_booking_core(
             visa_type=data.visa_details.visa_type,
             application_date=data.visa_details.application_date,
             applicant_name=data.visa_details.applicant_name,
+            first_middle_name=data.visa_details.first_middle_name,
+            last_name=data.visa_details.last_name,
             applicant_phone=data.visa_details.applicant_phone,
             passport_number=data.visa_details.passport_number,
             birth_date=data.visa_details.birth_date,
@@ -385,6 +391,8 @@ async def _create_booking_core(
             application_date=data.passport_details.application_date,
             expected_delivery_date=data.passport_details.expected_delivery_date,
             applicant_name=data.passport_details.applicant_name,
+            first_middle_name=data.passport_details.first_middle_name,
+            last_name=data.passport_details.last_name,
             applicant_phone=data.passport_details.applicant_phone,
             id_number=data.passport_details.id_number,
             birth_date=data.passport_details.birth_date,
@@ -701,6 +709,212 @@ async def create_transport_batch(
             reference_id=rc_ref,
             currency=curr_str,
             description=f"سند قبض موحد {rc_ref} لـ {n_seats} مقاعد نقل بري ({ticket_list_str})",
+            lines_data=je_lines,
+        )
+
+        for cid in cust_acc_credits:
+            c_obj = await db.get(Customer, cid)
+            if c_obj:
+                c_obj.balance = await get_entity_balance(db, "customer", cid)
+
+    await db.commit()
+    for bk in created_bookings:
+        await db.refresh(bk)
+
+    return {
+        "count": len(created_bookings),
+        "ticket_numbers": [b.ticket_number for b in created_bookings],
+        "booking_ids": [b.id for b in created_bookings],
+        "receipt_id": rc_ref,
+        "total_paid": float(total_paid),
+    }
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+async def create_multi_booking_batch(
+    data: BookingBatchCreate,
+    request: Request,
+    current_user: User = Depends(require_booking_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    مسار ذرّي موحد لإنشاء عدة تذاكر/معاملات في القطاعات الأربعة (طيران، نقل بري، تأشيرات، جوازات):
+    - يرفض الطرود (PARCEL) لأنها شحنة مفردة.
+    - في الطيران (FLIGHT): يفرض تسعير كل راكب حسب فئته (adult/child/infant) من category_prices لمنع أي خلط.
+    - يصدر تذكرة وقيد BOOKING مستقلاً لكل فرد، وسند قبض واحد RC موزع على المتبقي عبر VoucherAllocation.
+    """
+    from decimal import ROUND_DOWN
+    from app.models.voucher_allocation import VoucherAllocation
+    from app.models.accounting import AccountCurrency
+
+    if data.type == BookingType.PARCEL:
+        raise HTTPException(status_code=400, detail="تعدد المسافرين متاح للقطاعات الأربعة فقط (لا يشمل الطرود)")
+
+    n_items = len(data.items)
+    curr_str = (data.currency or "YER").upper()
+    total_paid = Decimal(str(data.paid_amount or 0)).quantize(Decimal("0.01"))
+
+    created_bookings: List[Booking] = []
+    for item in data.items:
+        item_selling = Decimal(str(data.selling_price or 0)).quantize(Decimal("0.01"))
+        item_cost = (
+            Decimal("0.00")
+            if current_user.role == UserRole.EMPLOYEE
+            else Decimal(str(data.cost_price or 0)).quantize(Decimal("0.01"))
+        )
+
+        if data.type == BookingType.FLIGHT:
+            if not item.flight_details:
+                await db.rollback()
+                raise HTTPException(status_code=400, detail="بيانات رحلة الطيران مطلوبة لكل مسافر")
+            cat = item.flight_details.passenger_category or "adult"
+            if data.category_prices is not None:
+                if cat not in data.category_prices:
+                    await db.rollback()
+                    raise HTTPException(status_code=400, detail=f"يجب تحديد سعر التذكرة لفئة ({cat})")
+                item_selling = Decimal(str(data.category_prices[cat])).quantize(Decimal("0.01"))
+            if current_user.role != UserRole.EMPLOYEE and data.category_costs and cat in data.category_costs:
+                item_cost = Decimal(str(data.category_costs[cat])).quantize(Decimal("0.01"))
+
+        if item_selling <= Decimal("0.00"):
+            await db.rollback()
+            raise HTTPException(status_code=400, detail="سعر البيع لكل تذكرة يجب أن يكون أكبر من الصفر")
+
+        single_req = BookingCreate(
+            type=data.type,
+            customer_id=data.customer_id,
+            cost_price=item_cost,
+            selling_price=item_selling,
+            paid_amount=Decimal("0.00"),
+            currency=curr_str,
+            supplier_id=data.supplier_id,
+            supplier_name=data.supplier_name,
+            notes=data.notes,
+            use_credit_balance=data.use_credit_balance,
+            payment_method=data.payment_method,
+            reference_number=data.reference_number,
+            flight_details=item.flight_details if data.type == BookingType.FLIGHT else None,
+            transport_details=item.transport_details if data.type == BookingType.TRANSPORT else None,
+            visa_details=item.visa_details if data.type == BookingType.VISA else None,
+            passport_details=item.passport_details if data.type == BookingType.PASSPORT else None,
+        )
+        bk = await _create_booking_core(
+            data=single_req,
+            request=request,
+            current_user=current_user,
+            db=db,
+            commit=False,
+        )
+        created_bookings.append(bk)
+
+    total_remaining = sum(
+        (Decimal(str(b.remaining_amount)) for b in created_bookings),
+        Decimal("0.00"),
+    ).quantize(Decimal("0.01"))
+    if total_paid > total_remaining:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"إجمالي المدفوع ({total_paid}) يتجاوز إجمالي المتبقي بعد الرصيد الدائن ({total_remaining})",
+        )
+
+    rc_ref = None
+    if total_paid > Decimal("0.00"):
+        pm_val = data.payment_method or PaymentMethod.CASH
+        ref_doc = (data.reference_number or "").strip() or None
+        active_shift = (
+            await get_active_shift(db, current_user.id, raise_if_none=False)
+            if pm_val == PaymentMethod.CASH
+            else None
+        )
+        channel_acc = await get_payment_channel_account(db, pm_val, curr_str)
+        rc_ref = await get_next_reference_number(db, "RC")
+
+        primary_cust = await db.get(Customer, created_bookings[0].customer_id)
+        ticket_list_str = "، ".join(b.ticket_number for b in created_bookings)
+
+        # Proportional distribution across remaining_amount (becomes equal split when prices match)
+        rem_caps = [Decimal(str(b.remaining_amount)).quantize(Decimal("0.01")) for b in created_bookings]
+        shares: List[Decimal] = [Decimal("0.00")] * n_items
+        unassigned = total_paid
+        for idx in range(n_items):
+            if idx < n_items - 1:
+                ideal = (total_paid * rem_caps[idx] / total_remaining).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+                take = min(ideal, rem_caps[idx], unassigned)
+            else:
+                take = min(rem_caps[idx], unassigned)
+            shares[idx] = take
+            unassigned = (unassigned - take).quantize(Decimal("0.01"))
+        if unassigned > Decimal("0.00"):
+            for idx in range(n_items):
+                room = (rem_caps[idx] - shares[idx]).quantize(Decimal("0.01"))
+                if room > Decimal("0.00"):
+                    add_amt = min(room, unassigned)
+                    shares[idx] = (shares[idx] + add_amt).quantize(Decimal("0.01"))
+                    unassigned = (unassigned - add_amt).quantize(Decimal("0.01"))
+                if unassigned == Decimal("0.00"):
+                    break
+
+        rc_tx = FinancialTransaction(
+            transaction_id=rc_ref,
+            type=TransactionType.PAYMENT_IN,
+            entity_type=EntityType.CUSTOMER,
+            entity_id=primary_cust.id,
+            amount=total_paid,
+            currency=curr_str,
+            payment_method=pm_val,
+            reference_number=ref_doc,
+            notes=f"سند قبض موحد ({n_items} تذاكر/معاملات: {ticket_list_str})",
+            transaction_date=office_today(),
+            booking_id=created_bookings[0].id,
+            created_by=current_user.id,
+            shift_id=active_shift.id if active_shift else None,
+        )
+        db.add(rc_tx)
+        await db.flush()
+
+        cust_acc_credits: Dict[int, Decimal] = {}
+        for bk, share in zip(created_bookings, shares):
+            if share <= Decimal("0.00"):
+                continue
+            db.add(
+                VoucherAllocation(
+                    voucher_id=rc_tx.id,
+                    booking_id=bk.id,
+                    allocated_amount=share,
+                    target_currency=AccountCurrency(curr_str),
+                    exchange_rate=Decimal("1.000000"),
+                    allocated_in_booking_currency=share,
+                )
+            )
+            bk.paid_amount = (Decimal(str(bk.paid_amount)) + share).quantize(Decimal("0.01"))
+            bk.remaining_amount = max(
+                Decimal("0.00"),
+                (Decimal(str(bk.selling_price)) - bk.paid_amount).quantize(Decimal("0.01")),
+            )
+            bk.status = (
+                BookingStatus.CONFIRMED
+                if bk.paid_amount > Decimal("0.00")
+                else BookingStatus.PENDING
+            )
+            cust_acc_credits[bk.customer_id] = (
+                cust_acc_credits.get(bk.customer_id, Decimal("0.00")) + share
+            )
+
+        je_lines = [{"account_id": channel_acc.id, "debit": total_paid, "credit": Decimal("0.0000")}]
+        for cid, amt in cust_acc_credits.items():
+            c_obj = await db.get(Customer, cid)
+            c_acc = await get_entity_account(db, "customer", cid, curr_str, c_obj.name if c_obj else "")
+            je_lines.append({"account_id": c_acc.id, "debit": Decimal("0.0000"), "credit": amt})
+
+        rc_je_ref = await get_next_reference_number(db, "JE")
+        await create_journal_entry(
+            session=db,
+            entry_number=rc_je_ref,
+            reference_type="RECEIPT",
+            reference_id=rc_ref,
+            currency=curr_str,
+            description=f"سند قبض موحد {rc_ref} لـ {n_items} معاملات ({ticket_list_str})",
             lines_data=je_lines,
         )
 

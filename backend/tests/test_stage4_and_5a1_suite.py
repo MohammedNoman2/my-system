@@ -94,7 +94,7 @@ def test_5a1_alembic_upgrade_on_temp_sqlite_copy():
         ver = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
         conn.close()
         assert "credit_applied" in cols
-        assert ver in ("b7c8d9e0f1a2", "c9d0e1f2a3b4", "d0e1f2a3b4c5", "e1f2a3b4c5d6")
+        assert ver in ("b7c8d9e0f1a2", "c9d0e1f2a3b4", "d0e1f2a3b4c5", "e1f2a3b4c5d6", "f2a3b4c5d6e7")
 
 
 def test_5a1_backup_and_restore_integrity():

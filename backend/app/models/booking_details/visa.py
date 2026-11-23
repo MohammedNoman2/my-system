@@ -15,6 +15,8 @@ class VisaBookingDetail(Base):
     # NOTE: country, expected_issue_date, duration are deliberately removed per specification!
     application_date: Mapped[date] = mapped_column(Date, nullable=False)
     applicant_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    first_middle_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     applicant_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     passport_number: Mapped[str] = mapped_column(String(50), nullable=False)
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)

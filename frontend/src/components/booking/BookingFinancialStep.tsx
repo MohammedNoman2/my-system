@@ -6,13 +6,15 @@ import api from '../../services/api';
 import type { Customer, Supplier } from '../../types';
 import { Input } from '../common/Input';
 import { Select } from '../common/Select';
+import { SupplierAutocomplete } from './SupplierAutocomplete';
 
 interface BookingFinancialStepProps {
   form: UseFormReturn<any>;
   selectedCustomer?: Customer | null;
+  passengerCount?: number;
 }
 
-export function BookingFinancialStep({ form, selectedCustomer }: BookingFinancialStepProps) {
+export function BookingFinancialStep({ form, selectedCustomer, passengerCount = 1 }: BookingFinancialStepProps) {
   const { role } = useAuthStore();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [creditBalances, setCreditBalances] = useState<Record<string, number>>({});
@@ -20,7 +22,9 @@ export function BookingFinancialStep({ form, selectedCustomer }: BookingFinancia
 
   const { register, watch, setValue, formState: { errors } } = form;
 
-  const sellingPrice = Number(watch('selling_price') || 0);
+  const count = Math.max(1, passengerCount);
+  const unitSellingPrice = Number(watch('selling_price') || 0);
+  const sellingPrice = Number((unitSellingPrice * count).toFixed(2));
   const paidAmount = Number(watch('paid_amount') || 0);
   const currency = String(watch('currency') || 'YER').toUpperCase();
   const useCreditBalance = watch('use_credit_balance') !== false;
@@ -251,7 +255,9 @@ export function BookingFinancialStep({ form, selectedCustomer }: BookingFinancia
         {/* ملخص الحساب */}
         <div className="mt-4 p-3 bg-white rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div>
-            <span className="text-slate-500">سعر البيع: </span>
+            <span className="text-slate-500">
+              {count > 1 ? `إجمالي البيع (${count} أفراد): ` : 'سعر البيع: '}
+            </span>
             <span className="font-bold text-slate-800">{sellingPrice.toLocaleString()} {currency}</span>
           </div>
           {paymentMethod !== 'deferred' && (
@@ -276,19 +282,19 @@ export function BookingFinancialStep({ form, selectedCustomer }: BookingFinancia
 
         {!isEmployee && (
           <div className="mt-4 pt-4 border-t border-slate-200">
-            <Select
-              label="المزود / المورد *"
-              {...register('supplier_id', {
-                required: 'يرجى تحديد المورد أو المزود'
-              })}
-              error={errors.supplier_id?.message as string}
-              options={[
-                { value: '', label: '-- اختر المورد من القائمة --' },
-                ...suppliers.map((s) => ({
-                  value: s.id.toString(),
-                  label: s.service_type ? `${s.name} (${s.service_type})` : s.name,
-                })),
-              ]}
+            <SupplierAutocomplete
+              suppliers={suppliers}
+              supplierId={watch('supplier_id')}
+              supplierName={watch('supplier_name')}
+              onSelectExisting={(s) => {
+                setValue('supplier_id', String(s.id), { shouldValidate: true });
+                setValue('supplier_name', s.name);
+              }}
+              onManualChange={(name) => {
+                setValue('supplier_id', '', { shouldValidate: true });
+                setValue('supplier_name', name, { shouldValidate: true });
+              }}
+              error={(errors.supplier_id?.message || errors.supplier_name?.message) as string}
             />
           </div>
         )}

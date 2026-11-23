@@ -121,10 +121,8 @@ export function TransportBookingForm({ onSuccess, onCancel }: TransportBookingFo
   };
 
   const handleOcrExtracted = (data: any) => {
-    const parts = String(data.passenger_name || '').trim().split(/\s+/);
     updatePassenger(0, {
-      ...(parts.length >= 3 ? { first_middle_name: parts.slice(0, 3).join(' '), last_name: parts.slice(3).join(' ') } : {}),
-      ...(data.id_number ? { id_number: data.id_number } : {}),
+      ...(data.id_number || data.passport_number ? { id_number: data.id_number || data.passport_number } : {}),
       ...(data.birth_date ? { birth_date: data.birth_date } : {}),
       ...(data.birth_place ? { birth_place: data.birth_place } : {}),
     });
@@ -573,7 +571,11 @@ export function TransportBookingForm({ onSuccess, onCancel }: TransportBookingFo
                 </span>
               </div>
             )}
-            <BookingFinancialStep form={form} selectedCustomer={selectedCustomer} />
+            <BookingFinancialStep
+              form={form}
+              selectedCustomer={selectedCustomer}
+              passengerCount={passengers.length}
+            />
           </div>
         )}
 
