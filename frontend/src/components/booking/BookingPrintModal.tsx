@@ -1,64 +1,150 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Printer, Download, Loader2 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import api from '../../services/api';
 
 interface BookingPrintModalProps {
-  bookingId: number | null;
+  bookingId?: number | null;
+  bookingIds?: number[];
   isOpen: boolean;
   onClose: () => void;
 }
 
-export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintModalProps) {
+export function BookingPrintModal({
+  bookingId,
+  bookingIds,
+  isOpen,
+  onClose,
+}: BookingPrintModalProps) {
+  const effectiveIds = useMemo(() => {
+    if (bookingIds && bookingIds.length > 0) return bookingIds;
+    if (bookingId) return [bookingId];
+    return [];
+  }, [bookingId, bookingIds]);
+
+  const [activeIndex, setActiveIndex] = useState(0);
   const [printMode, setPrintMode] = useState<'thermal' | 'a4'>('thermal');
-  const [htmlContent, setHtmlContent] = useState<string>('');
+  const [htmlMap, setHtmlMap] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Fetch voucher HTML via Axios (carries auth cookies automatically)
   useEffect(() => {
-    if (!bookingId || !isOpen) return;
+    setActiveIndex(0);
+  }, [effectiveIds, isOpen]);
 
+  // Fetch all tickets in the batch via Axios (carries auth cookies automatically)
+  useEffect(() => {
+    if (effectiveIds.length === 0 || !isOpen) return;
+
+    let cancelled = false;
     setIsLoading(true);
     setError(null);
-    setHtmlContent('');
+    setHtmlMap({});
 
-    api
-      .get(`/bookings/${bookingId}/print?mode=${printMode}&format=html`)
-      .then((res) => {
-        setHtmlContent(res.data);
+    Promise.all(
+      effectiveIds.map((id) =>
+        api
+          .get(`/bookings/${id}/print?mode=${printMode}&format=html`)
+          .then((res) => [id, res.data as string] as const)
+      )
+    )
+      .then((entries) => {
+        if (cancelled) return;
+        const map: Record<number, string> = {};
+        for (const [id, html] of entries) {
+          map[id] = html;
+        }
+        setHtmlMap(map);
       })
       .catch((err) => {
+        if (cancelled) return;
         const msg =
           err.response?.data?.detail ||
           `فشل تحميل السند (${err.response?.status || 'خطأ شبكة'})`;
         setError(msg);
       })
-      .finally(() => setIsLoading(false));
-  }, [bookingId, isOpen, printMode]);
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
-  if (!bookingId) return null;
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveIds, isOpen, printMode]);
 
-  const pdfDownloadUrl = `/api/bookings/${bookingId}/print?mode=${printMode}&format=pdf`;
+  if (effectiveIds.length === 0) return null;
 
-  const handlePrint = () => {
+  const activeId = effectiveIds[Math.min(activeIndex, effectiveIds.length - 1)];
+  const htmlContent = htmlMap[activeId] || '';
+
+  const handlePrintCurrent = () => {
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.focus();
       iframeRef.current.contentWindow.print();
     }
   };
 
+  const handlePrintAll = () => {
+    const pages = effectiveIds.map((id) => htmlMap[id]).filter(Boolean);
+    if (pages.length === 0) return;
+    if (pages.length === 1) {
+      handlePrintCurrent();
+      return;
+    }
+    const firstStyleMatch = pages[0].match(/<style[^>]*>[\s\S]*?<\/style>/i);
+    const styleBlock = firstStyleMatch ? firstStyleMatch[0] : '';
+    const bodies = pages.map((html, idx) => {
+      const m = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const inner = m ? m[1] : html;
+      const breakStyle = idx < pages.length - 1 ? 'page-break-after: always; break-after: page;' : '';
+      return `<div style="${breakStyle}">${inner}</div>`;
+    });
+    const combinedHtml = `<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>طباعة التذاكر (${pages.length})</title>${styleBlock}</head><body>${bodies.join('\n')}</body></html>`;
+    const printWin = window.open('', '_blank', 'width=900,height=650');
+    if (!printWin) return;
+    printWin.document.open();
+    printWin.document.write(combinedHtml);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(() => printWin.print(), 300);
+  };
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="معاينة وطباعة سند الحجز الرسمي"
-      description="اختر صيغة الطباعة المناسبة (سند حراري 80mm أو قياس A4 رسمي)"
+      title={
+        effectiveIds.length > 1
+          ? `معاينة وطباعة تذاكر الدفعة (${effectiveIds.length} تذاكر)`
+          : 'معاينة وطباعة سند الحجز الرسمي'
+      }
+      description="اختر صيغة الطباعة المناسبة (سند حراري 80mm أفقي أو قياس A4 رسمي)"
       size="xl"
     >
       <div className="space-y-4">
+        {/* Batch ticket switcher */}
+        {effectiveIds.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2 p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl">
+            <span className="text-xs font-bold text-blue-900 ml-1">التذاكر المُصدَرة:</span>
+            {effectiveIds.map((id, idx) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveIndex(idx)}
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
+                  activeIndex === idx
+                    ? 'bg-[#1e3a8a] text-white shadow-sm'
+                    : 'bg-white text-blue-900 border border-blue-200 hover:bg-blue-100/60'
+                }`}
+              >
+                تذكرة {idx + 1}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
           <div className="flex items-center gap-2">
@@ -72,7 +158,7 @@ export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintMo
                   : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
               }`}
             >
-              حراري (80mm Thermal)
+              حراري (80mm × 60mm أفقي)
             </button>
             <button
               type="button"
@@ -90,24 +176,37 @@ export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintMo
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handlePrint}
+              onClick={handlePrintCurrent}
               disabled={isLoading || !!error || !htmlContent}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
               title="اختر Save as PDF من نافذة الطباعة لحفظ ملف PDF أصلي"
             >
               <Download className="w-3.5 h-3.5 text-slate-500" />
-              حفظ كـ PDF
+              طباعة الحالية / PDF
             </button>
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              onClick={handlePrint}
-              disabled={isLoading || !!error || !htmlContent}
-              icon={<Printer className="w-4 h-4" />}
-            >
-              طباعة الآن
-            </Button>
+            {effectiveIds.length > 1 ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={handlePrintAll}
+                disabled={isLoading || !!error || Object.keys(htmlMap).length === 0}
+                icon={<Printer className="w-4 h-4" />}
+              >
+                طباعة جميع التذاكر ({effectiveIds.length})
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={handlePrintCurrent}
+                disabled={isLoading || !!error || !htmlContent}
+                icon={<Printer className="w-4 h-4" />}
+              >
+                طباعة الآن
+              </Button>
+            )}
           </div>
         </div>
 
@@ -116,7 +215,7 @@ export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintMo
           {isLoading && (
             <div className="flex flex-col items-center gap-3 text-slate-500">
               <Loader2 className="w-8 h-8 animate-spin" />
-              <span className="text-sm">جاري تحميل السند...</span>
+              <span className="text-sm">جاري تحميل التذاكر...</span>
             </div>
           )}
 
@@ -136,7 +235,7 @@ export function BookingPrintModal({ bookingId, isOpen, onClose }: BookingPrintMo
               srcDoc={htmlContent}
               title="سند الحجز"
               className={`h-full bg-white shadow-sm transition-all duration-300 ${
-                printMode === 'thermal' ? 'w-[380px]' : 'w-full'
+                printMode === 'thermal' ? 'w-[420px]' : 'w-full'
               }`}
             />
           )}

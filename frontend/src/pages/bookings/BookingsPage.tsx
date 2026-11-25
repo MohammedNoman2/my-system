@@ -20,11 +20,12 @@ type TabType = 'list' | 'flight' | 'transport' | 'visa' | 'passport' | 'parcel';
 
 export function BookingsPage() {
   const [activeTab, setActiveTab] = useState<TabType>('list');
-  const [autoPrintId, setAutoPrintId] = useState<number | null>(null);
+  const [autoPrintIds, setAutoPrintIds] = useState<number[]>([]);
 
-  const handleBookingSuccess = (newBookingId: number) => {
-    // Open voucher print modal automatically per §4.5
-    setAutoPrintId(newBookingId);
+  const handleBookingSuccess = (newBookingIds: number | number[]) => {
+    // Open voucher print modal automatically for single or batch bookings
+    const ids = Array.isArray(newBookingIds) ? newBookingIds : [newBookingIds];
+    setAutoPrintIds(ids.filter(Boolean));
     setActiveTab('list');
   };
 
@@ -104,9 +105,9 @@ export function BookingsPage() {
 
       {/* Auto-print modal after successful booking */}
       <BookingPrintModal
-        bookingId={autoPrintId}
-        isOpen={!!autoPrintId}
-        onClose={() => setAutoPrintId(null)}
+        bookingIds={autoPrintIds}
+        isOpen={autoPrintIds.length > 0}
+        onClose={() => setAutoPrintIds([])}
       />
     </div>
   );

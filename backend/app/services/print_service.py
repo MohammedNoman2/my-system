@@ -57,18 +57,22 @@ TITLES = {
 }
 
 
-def build_cell_html(label: str, value: Any, bold_value: bool = True) -> str:
+def build_cell_html(label: str, value: Any, bold_value: bool = True, is_thermal: bool = False) -> str:
     val_str = str(value) if value is not None and str(value).strip() != "" else "--"
     weight_class = "font-bold" if bold_value else "font-normal"
+    cell_pad = "2px 3px" if is_thermal else "6px 8px"
+    cell_fs = "6.5px" if is_thermal else "13px"
+    label_fs = "6px" if is_thermal else "11px"
+    label_ml = "2px" if is_thermal else "6px"
     return f"""
-    <td style="border: 1px solid #1f2937; padding: 6px 8px; vertical-align: middle; text-align: right; font-size: 13px;">
-        <span style="color: #4b5563; font-size: 11px; display: inline-block; margin-left: 6px;">{label}:</span>
+    <td style="border: {'0.7px' if is_thermal else '1px'} solid #1f2937; padding: {cell_pad}; vertical-align: middle; text-align: right; font-size: {cell_fs}; line-height: {'1.15' if is_thermal else '1.35'};">
+        <span style="color: #4b5563; font-size: {label_fs}; display: inline-block; margin-left: {label_ml};">{label}:</span>
         <span class="{weight_class}" style="color: #111827; font-weight: {'bold' if bold_value else 'normal'};">{val_str}</span>
     </td>
     """
 
 
-def build_field_table_html(rows: List[List[Dict[str, Any]]]) -> str:
+def build_field_table_html(rows: List[List[Dict[str, Any]]], is_thermal: bool = False) -> str:
     """
     RTL Table Builder:
     Builds a 5 rows x 3 columns table.
@@ -83,12 +87,14 @@ def build_field_table_html(rows: List[List[Dict[str, Any]]]) -> str:
             label = cell.get("label", "")
             val = cell.get("value", "--")
             bold = cell.get("bold", True)
-            cells_html.append(build_cell_html(label, val, bold))
+            cells_html.append(build_cell_html(label, val, bold, is_thermal=is_thermal))
         row_str = f"<tr>{''.join(cells_html)}</tr>"
         table_rows_html.append(row_str)
 
+    tbl_margin = "3px 0 3px 0" if is_thermal else "10px 0 12px 0"
+    tbl_border = "1px" if is_thermal else "1.5px"
     return f"""
-    <table style="width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 12px; border: 1.5px solid #1f2937;">
+    <table style="width: 100%; border-collapse: collapse; margin: {tbl_margin}; border: {tbl_border} solid #1f2937; table-layout: fixed;">
         <tbody>
             {''.join(table_rows_html)}
         </tbody>
@@ -263,20 +269,21 @@ def get_booking_rows(booking: Booking) -> List[List[Dict[str, Any]]]:
 def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str = "thermal") -> str:
     title = TITLES.get(booking.type, "سند حجز")
     policy = POLICIES.get(booking.type, "")
+    is_thermal = (mode == "thermal")
     rows = get_booking_rows(booking)
-    table_html = build_field_table_html(rows)
+    table_html = build_field_table_html(rows, is_thermal=is_thermal)
 
     logo_src = getattr(office_settings, "logo_data", None) or (
         office_settings.logo_image_url if office_settings.logo_image_url and os.path.exists(office_settings.logo_image_url) else None
     )
+    logo_max_h = "32px" if is_thermal else "68px"
     if logo_src:
-        logo_content = f'<img src="{logo_src}" style="max-width: 100%; max-height: 75px; object-fit: contain;" />'
+        logo_content = f'<img src="{logo_src}" style="max-width: 100%; max-height: {logo_max_h}; object-fit: contain; display: block;" />'
     else:
-        logo_content = f'<div style="font-size: 14px; font-weight: bold; color: #111827; text-align: center;">{office_settings.office_name}</div>'
+        logo_content = f'<div style="font-size: {"8px" if is_thermal else "14px"}; font-weight: bold; color: #111827; text-align: center;">{office_settings.office_name}</div>'
 
-    is_thermal = (mode == "thermal")
-    container_width = "76mm" if is_thermal else "280mm"
-    container_padding = "2mm" if is_thermal else "20px"
+    container_width = "77mm" if is_thermal else "277mm"
+    container_padding = "1mm" if is_thermal else "14px"
 
     html = f"""<!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -287,7 +294,7 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
         {_font_face_css()}
         @page {{
             size: {'80mm 60mm' if is_thermal else 'A4 landscape'};
-            margin: {'2mm' if is_thermal else '10mm'};
+            margin: {'1.5mm' if is_thermal else '10mm'};
         }}
         * {{
             box-sizing: border-box;
@@ -298,7 +305,7 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
             padding: 0;
             background: #ffffff;
             direction: rtl;
-            font-size: {'9px' if is_thermal else '12px'};
+            font-size: {'7px' if is_thermal else '12px'};
             color: #111827;
         }}
         .voucher-container {{
@@ -307,87 +314,95 @@ def generate_voucher_html(booking: Booking, office_settings: Settings, mode: str
             margin: 0 auto;
             padding: {container_padding};
             background: #ffffff;
+            page-break-inside: avoid;
         }}
         .header {{
             display: flex;
             flex-direction: row-reverse;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 2px solid #111827;
-            padding-bottom: 8px;
-            margin-bottom: 6px;
+            gap: {'4px' if is_thermal else '12px'};
+            border-bottom: {'1.2px' if is_thermal else '2px'} solid #111827;
+            padding-bottom: {'3px' if is_thermal else '8px'};
+            margin-bottom: {'3px' if is_thermal else '6px'};
         }}
         .logo-box {{
-            width: 110px;
-            height: 75px;
-            border: 1.5px solid #374151;
+            width: {'46px' if is_thermal else '115px'};
+            height: {'34px' if is_thermal else '70px'};
+            border: none;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 4px;
+            padding: 0;
+            flex-shrink: 0;
         }}
         .center-info {{
             text-align: center;
             flex-grow: 1;
         }}
         .center-title {{
-            font-size: 22px;
+            font-size: {'10px' if is_thermal else '22px'};
             font-weight: 900;
             margin: 0;
             color: #000000;
+            line-height: 1.1;
         }}
         .center-ref {{
-            font-size: 15px;
+            font-size: {'7.5px' if is_thermal else '15px'};
             font-weight: bold;
-            margin-top: 4px;
+            margin-top: {'1px' if is_thermal else '4px'};
             color: #374151;
             direction: ltr;
         }}
         .office-identity {{
             text-align: right;
-            max-width: 260px;
+            max-width: {'34mm' if is_thermal else '260px'};
         }}
         .office-name {{
-            font-size: 18px;
+            font-size: {'8.5px' if is_thermal else '18px'};
             font-weight: 900;
             color: #000000;
             margin: 0;
+            line-height: 1.1;
         }}
         .office-tagline {{
-            font-size: 12px;
+            font-size: {'6px' if is_thermal else '12px'};
             font-weight: 700;
             color: #374151;
-            margin: 2px 0;
+            margin: {'0.5px 0' if is_thermal else '2px 0'};
+            line-height: 1.1;
         }}
         .office-address {{
-            font-size: 10px;
+            font-size: {'5.5px' if is_thermal else '10px'};
             color: #4b5563;
-            margin: 1px 0;
+            margin: 0;
+            line-height: 1.1;
         }}
         .office-phones {{
-            font-size: 10px;
+            font-size: {'5.5px' if is_thermal else '10px'};
             font-weight: bold;
             color: #1f2937;
-            margin: 1px 0;
+            margin: 0;
             direction: ltr;
             text-align: right;
+            line-height: 1.1;
         }}
         .policy-box {{
-            font-size: 9px;
+            font-size: {'5px' if is_thermal else '9px'};
             color: #4b5563;
-            line-height: 1.35;
+            line-height: {'1.15' if is_thermal else '1.35'};
             border-top: 1px solid #d1d5db;
-            padding-top: 6px;
-            margin-top: 4px;
+            padding-top: {'2px' if is_thermal else '6px'};
+            margin-top: {'2px' if is_thermal else '4px'};
         }}
         .footer {{
             text-align: center;
-            font-size: 11px;
+            font-size: {'6px' if is_thermal else '11px'};
             font-weight: bold;
             color: #111827;
-            margin-top: 8px;
-            padding-top: 4px;
-            border-top: 1.5px solid #111827;
+            margin-top: {'2px' if is_thermal else '8px'};
+            padding-top: {'2px' if is_thermal else '4px'};
+            border-top: {'1px' if is_thermal else '1.5px'} solid #111827;
         }}
     </style>
 </head>

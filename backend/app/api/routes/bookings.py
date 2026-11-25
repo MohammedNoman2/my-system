@@ -159,14 +159,14 @@ async def _create_booking_core(
                 return False
             if ta == tb:
                 return True
+            if strict:
+                # عند المطابقة بالهاتف: تطابق تام لجميع أجزاء الاسم (الأول + الثاني + الثالث + اللقب)
+                return False
+            # عند تطابق نفس رقم الهوية/الجواز الفريد: يسمح فقط بكون أحد الاسمين امتداداً للآخر بنفس الاسم الأول
             if ta[0] != tb[0]:
                 return False
             short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-            if set(short) <= set(long_):
-                return True
-            if strict:
-                return False
-            return len(set(ta) & set(tb)) >= min(2, len(ta), len(tb))
+            return set(short) <= set(long_)
 
         cust_name = re.sub(r"\s+", " ", (cust_name or "").strip())
         cust_phone = re.sub(r"\D", "", (cust_phone or "").strip())
@@ -206,14 +206,19 @@ async def _create_booking_core(
                     )
                 customer = doc_match
 
-        # 2. If not found by document, search by phone_number and check strict subset name compatibility
+        # 2. If not found by document, search by phone_number and require exact full-name match without conflicting document
         if not customer:
             phone_res = await db.execute(select(Customer).where(Customer.phone_number == cust_phone))
             same_phone_customers = phone_res.scalars().all()
             for cand in same_phone_customers:
-                if _names_compatible(cand.name, cust_name, strict=True):
-                    customer = cand
-                    break
+                if not _names_compatible(cand.name, cust_name, strict=True):
+                    continue
+                if cust_passport and cand.passport_number and cand.passport_number.strip().upper() != cust_passport:
+                    continue
+                if cust_id and cand.id_number and cand.id_number.strip() != cust_id:
+                    continue
+                customer = cand
+                break
 
         # 3. If matched, update missing passport/id if not conflicting; else create new customer record
         if customer:
@@ -577,10 +582,10 @@ async def create_transport_batch(
 
     # 1. Create each TR booking atomically (commit=False) with paid_amount=0 first
     created_bookings: List[Booking] = []
-    for p_detail in data.passengers:
+    for idx, p_detail in enumerate(data.passengers):
         single_req = BookingCreate(
             type=BookingType.TRANSPORT,
-            customer_id=data.customer_id,
+            customer_id=data.customer_id if idx == 0 else None,
             cost_price=cost_per_seat,
             selling_price=selling_per_seat,
             paid_amount=Decimal("0.00"),
@@ -755,7 +760,7 @@ async def create_multi_booking_batch(
     total_paid = Decimal(str(data.paid_amount or 0)).quantize(Decimal("0.01"))
 
     created_bookings: List[Booking] = []
-    for item in data.items:
+    for idx, item in enumerate(data.items):
         item_selling = Decimal(str(data.selling_price or 0)).quantize(Decimal("0.01"))
         item_cost = (
             Decimal("0.00")
@@ -782,7 +787,7 @@ async def create_multi_booking_batch(
 
         single_req = BookingCreate(
             type=data.type,
-            customer_id=data.customer_id,
+            customer_id=data.customer_id if idx == 0 else None,
             cost_price=item_cost,
             selling_price=item_selling,
             paid_amount=Decimal("0.00"),

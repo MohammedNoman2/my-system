@@ -9,6 +9,7 @@ import type { Customer } from '../../types';
 import { useUIStore } from '../../context/uiStore';
 import { StepperForm } from './StepperForm';
 import { CustomerSearch } from './CustomerSearch';
+import { PassengerNameAutocomplete } from './PassengerNameAutocomplete';
 import { BookingFinancialStep } from './BookingFinancialStep';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
@@ -219,12 +220,21 @@ export function ParcelBookingForm({ onSuccess, onCancel }: ParcelBookingFormProp
                   <span className="text-xs font-bold text-[#1e3a8a] bg-blue-100/70 px-2 py-0.5 rounded-md">
                     بيانات المرسل
                   </span>
-                  <Input
+                  <PassengerNameAutocomplete
                     label="اسم المرسل الكامل"
                     placeholder="اسم المرسل..."
                     required
+                    value={form.watch('sender_name') || ''}
                     error={errors.sender_name?.message}
-                    {...register('sender_name')}
+                    onChange={(val) => {
+                      setSelectedCustomer(null);
+                      setValue('sender_name', val, { shouldValidate: true });
+                    }}
+                    onSelectCustomer={(c) => {
+                      setSelectedCustomer(c);
+                      setValue('sender_name', c.name, { shouldValidate: true });
+                      setValue('sender_phone', c.phone_number, { shouldValidate: true });
+                    }}
                   />
                   <Input
                     label="رقم هاتف المرسل"
@@ -240,12 +250,19 @@ export function ParcelBookingForm({ onSuccess, onCancel }: ParcelBookingFormProp
                   <span className="text-xs font-bold text-orange-800 bg-orange-100/70 px-2 py-0.5 rounded-md">
                     بيانات المستلم
                   </span>
-                  <Input
+                  <PassengerNameAutocomplete
                     label="اسم المستلم الكامل"
                     placeholder="اسم المستلم في الوجهة..."
                     required
+                    value={form.watch('receiver_name') || ''}
                     error={errors.receiver_name?.message}
-                    {...register('receiver_name')}
+                    onChange={(val) => {
+                      setValue('receiver_name', val, { shouldValidate: true });
+                    }}
+                    onSelectCustomer={(c) => {
+                      setValue('receiver_name', c.name, { shouldValidate: true });
+                      setValue('receiver_phone', c.phone_number, { shouldValidate: true });
+                    }}
                   />
                   <Input
                     label="رقم هاتف المستلم"

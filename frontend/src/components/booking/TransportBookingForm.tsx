@@ -9,6 +9,7 @@ import type { Customer } from '../../types';
 import { useUIStore } from '../../context/uiStore';
 import { StepperForm } from './StepperForm';
 import { CustomerSearch } from './CustomerSearch';
+import { PassengerNameAutocomplete } from './PassengerNameAutocomplete';
 import { OcrScanButton } from './OcrScanButton';
 import { BookingFinancialStep } from './BookingFinancialStep';
 import { Input } from '../common/Input';
@@ -65,7 +66,7 @@ const transportTripSchema = yup.object({
 type TransportFormValues = yup.InferType<typeof transportTripSchema>;
 
 interface TransportBookingFormProps {
-  onSuccess: (bookingId: number) => void;
+  onSuccess: (bookingIds: number | number[]) => void;
   onCancel: () => void;
 }
 
@@ -263,7 +264,7 @@ export function TransportBookingForm({ onSuccess, onCancel }: TransportBookingFo
         });
         const tickets = (res.data?.ticket_numbers || []).join('، ');
         addToast(`تم إصدار ${res.data?.count || passengerPayloads.length} تذاكر نقل بري: ${tickets}`, 'success');
-        onSuccess(res.data.booking_ids[0]);
+        onSuccess(res.data.booking_ids || []);
       }
     } catch (err: any) {
       const msg = err.response?.data?.detail || 'فشل حفظ حجز النقل';
@@ -384,20 +385,54 @@ export function TransportBookingForm({ onSuccess, onCancel }: TransportBookingFo
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    <Input
+                    <PassengerNameAutocomplete
                       label="الاسم الثلاثي فقط"
                       placeholder="مثال: محمد أحمد علي"
                       required
                       value={p.first_middle_name}
-                      onChange={(e) => updatePassenger(idx, { first_middle_name: e.target.value })}
+                      onChange={(val) => {
+                        if (idx === 0) setSelectedCustomer(null);
+                        updatePassenger(idx, { first_middle_name: val });
+                      }}
+                      onSelectCustomer={(c) => {
+                        const parts = c.name.trim().split(/\s+/);
+                        updatePassenger(idx, {
+                          first_middle_name: parts.slice(0, 3).join(' '),
+                          last_name: parts.slice(3).join(' '),
+                          passenger_phone: c.phone_number || '',
+                          id_number: c.id_number || c.passport_number || '',
+                        });
+                        if (idx === 0) {
+                          setSelectedCustomer(c);
+                          setValue('passenger_name' as any, c.name);
+                          setValue('passenger_phone' as any, c.phone_number);
+                        }
+                      }}
                     />
 
-                    <Input
+                    <PassengerNameAutocomplete
                       label="اللقب"
                       placeholder="مثال: الصالحي"
                       required
                       value={p.last_name}
-                      onChange={(e) => updatePassenger(idx, { last_name: e.target.value })}
+                      onChange={(val) => {
+                        if (idx === 0) setSelectedCustomer(null);
+                        updatePassenger(idx, { last_name: val });
+                      }}
+                      onSelectCustomer={(c) => {
+                        const parts = c.name.trim().split(/\s+/);
+                        updatePassenger(idx, {
+                          first_middle_name: parts.slice(0, 3).join(' '),
+                          last_name: parts.slice(3).join(' '),
+                          passenger_phone: c.phone_number || '',
+                          id_number: c.id_number || c.passport_number || '',
+                        });
+                        if (idx === 0) {
+                          setSelectedCustomer(c);
+                          setValue('passenger_name' as any, c.name);
+                          setValue('passenger_phone' as any, c.phone_number);
+                        }
+                      }}
                     />
 
                     <Input

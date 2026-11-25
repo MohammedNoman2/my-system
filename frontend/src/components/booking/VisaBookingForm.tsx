@@ -9,6 +9,7 @@ import type { Customer } from '../../types';
 import { useUIStore } from '../../context/uiStore';
 import { StepperForm } from './StepperForm';
 import { CustomerSearch } from './CustomerSearch';
+import { PassengerNameAutocomplete } from './PassengerNameAutocomplete';
 import { OcrScanButton } from './OcrScanButton';
 import { BookingFinancialStep } from './BookingFinancialStep';
 import { Input } from '../common/Input';
@@ -51,7 +52,7 @@ const visaSchema = yup.object({
 type VisaFormValues = yup.InferType<typeof visaSchema>;
 
 interface VisaBookingFormProps {
-  onSuccess: (bookingId: number) => void;
+  onSuccess: (bookingIds: number | number[]) => void;
   onCancel: () => void;
 }
 
@@ -208,7 +209,7 @@ export function VisaBookingForm({ onSuccess, onCancel }: VisaBookingFormProps) {
           items,
         });
         addToast(`تم إصدار ${res.data.count} معاملات تأشيرة بنجاح`, 'success');
-        onSuccess(res.data.booking_ids[0]);
+        onSuccess(res.data.booking_ids || []);
       }
     } catch (err: any) {
       addToast(err.response?.data?.detail || 'فشل حفظ طلب التأشيرة', 'error');
@@ -282,8 +283,54 @@ export function VisaBookingForm({ onSuccess, onCancel }: VisaBookingFormProps) {
                     )}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    <Input label="الاسم الثلاثي فقط" placeholder="مثال: محمد أحمد علي" required value={a.first_middle_name} onChange={(e) => updateApplicant(idx, { first_middle_name: e.target.value })} />
-                    <Input label="اللقب" placeholder="مثال: الصالحي" required value={a.last_name} onChange={(e) => updateApplicant(idx, { last_name: e.target.value })} />
+                    <PassengerNameAutocomplete
+                      label="الاسم الثلاثي فقط"
+                      placeholder="مثال: محمد أحمد علي"
+                      required
+                      value={a.first_middle_name}
+                      onChange={(val) => {
+                        if (idx === 0) setSelectedCustomer(null);
+                        updateApplicant(idx, { first_middle_name: val });
+                      }}
+                      onSelectCustomer={(c) => {
+                        const parts = c.name.trim().split(/\s+/);
+                        updateApplicant(idx, {
+                          first_middle_name: parts.slice(0, 3).join(' '),
+                          last_name: parts.slice(3).join(' '),
+                          applicant_phone: c.phone_number || '',
+                          passport_number: c.passport_number || '',
+                        });
+                        if (idx === 0) {
+                          setSelectedCustomer(c);
+                          setValue('applicant_name' as any, c.name);
+                          setValue('applicant_phone' as any, c.phone_number);
+                        }
+                      }}
+                    />
+                    <PassengerNameAutocomplete
+                      label="اللقب"
+                      placeholder="مثال: الصالحي"
+                      required
+                      value={a.last_name}
+                      onChange={(val) => {
+                        if (idx === 0) setSelectedCustomer(null);
+                        updateApplicant(idx, { last_name: val });
+                      }}
+                      onSelectCustomer={(c) => {
+                        const parts = c.name.trim().split(/\s+/);
+                        updateApplicant(idx, {
+                          first_middle_name: parts.slice(0, 3).join(' '),
+                          last_name: parts.slice(3).join(' '),
+                          applicant_phone: c.phone_number || '',
+                          passport_number: c.passport_number || '',
+                        });
+                        if (idx === 0) {
+                          setSelectedCustomer(c);
+                          setValue('applicant_name' as any, c.name);
+                          setValue('applicant_phone' as any, c.phone_number);
+                        }
+                      }}
+                    />
                     <Input label="رقم الهاتف" placeholder="77xxxxxxx" required value={a.applicant_phone} onChange={(e) => updateApplicant(idx, { applicant_phone: e.target.value })} />
                     <Input label="رقم الجواز" placeholder="P1234567" required value={a.passport_number} onChange={(e) => updateApplicant(idx, { passport_number: e.target.value })} />
                     <Input label="تاريخ الميلاد" type="date" required value={a.birth_date} onChange={(e) => updateApplicant(idx, { birth_date: e.target.value })} />

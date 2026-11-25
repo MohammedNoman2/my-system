@@ -28,13 +28,14 @@ export function BookingDashboard() {
           // Check if booked today
           const bDate = b.booking_date?.split('T')[0];
           if (bDate === todayStr) {
-            sales[curr] = (sales[curr] || 0) + (b.selling_price || 0);
+            const priceNum = Number(b.selling_price || 0);
+            sales[curr] = Number(((sales[curr] || 0) + (Number.isFinite(priceNum) ? priceNum : 0)).toFixed(2));
             if (counts[b.type as keyof typeof counts] !== undefined) {
               counts[b.type as keyof typeof counts]++;
             }
           }
           
-          if (b.remaining_amount > 0) {
+          if (Number(b.remaining_amount || 0) > 0) {
             late_debts.push(b);
           }
         });
@@ -66,7 +67,8 @@ export function BookingDashboard() {
             <div className="space-y-1">
               {Object.entries(stats.today_sales).map(([curr, amount]) => (
                 <p key={curr} className="text-xl font-black text-slate-900">
-                  {amount.toLocaleString()} <span className="text-sm font-normal text-slate-500">{curr}</span>
+                  {Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                  <span className="text-sm font-normal text-slate-500">{curr}</span>
                 </p>
               ))}
             </div>
