@@ -37,6 +37,7 @@ const emptyPassportApplicant = (): PassportApplicantDraft => ({
 const passportSchema = yup.object({
   passport_type: yup.string().oneOf(['new', 'renewal', 'lost', 'damaged']).required(),
   priority: yup.string().oneOf(['normal', 'urgent']).required(),
+  issuing_office: yup.string().nullable().optional(),
   application_date: yup.string().required('تاريخ التقديم مطلوب'),
   expected_delivery_date: yup.string().nullable().optional(),
   selling_price: yup.number().positive('سعر البيع يجب أن يكون أكبر من الصفر').required('سعر البيع مطلوب'),
@@ -163,6 +164,7 @@ export function PassportBookingForm({ onSuccess, onCancel }: PassportBookingForm
       passport_details: {
         passport_type: values.passport_type,
         priority: values.priority,
+        issuing_office: values.issuing_office || null,
         application_date: values.application_date,
         expected_delivery_date: values.expected_delivery_date || null,
         first_middle_name: a.first_middle_name.trim(),
@@ -246,6 +248,7 @@ export function PassportBookingForm({ onSuccess, onCancel }: PassportBookingForm
             <Select label="الأولوية" required error={errors.priority?.message} {...register('priority')} options={[{ value: 'normal', label: 'عادي' }, { value: 'urgent', label: 'مستعجل' }]} />
             <Input label="تاريخ التقديم" type="date" required error={errors.application_date?.message} {...register('application_date')} />
             <Input label="تاريخ التسليم المتوقع" type="date" error={errors.expected_delivery_date?.message} {...register('expected_delivery_date')} />
+            <Input label="مكتب الإصدار (اختياري)" placeholder="مثال: مصلحة الجوازات - صنعاء" {...register('issuing_office')} />
           </div>
         )}
 

@@ -1,6 +1,8 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,8 @@ from app.api.deps import get_current_user
 from app.core.config import office_today, to_office_time
 from app.core.database import get_db
 from app.models.booking import Booking, BookingStatus
+from app.models.booking_details.flight import FlightBookingDetail
+from app.models.booking_details.transport import TransportBookingDetail
 from app.models.booking_details.passport import PassportBookingDetail
 from app.models.customer import Customer
 from app.models.financial import FinancialTransaction, TransactionType
@@ -209,5 +213,79 @@ async def get_dashboard_alerts(
                 "description": f"تاريخ التسليم: {p_detail.expected_delivery_date} - تذكرة رقم: {b.ticket_number}",
                 "entity_id": b.id,
             })
+
+    def _build_whatsapp_url(phone_raw: str, message: str) -> Optional[str]:
+        digits = re.sub(r"\D", "", phone_raw or "")
+        if digits.startswith("0") and len(digits) == 10:
+            digits = f"967{digits[1:]}"
+        elif len(digits) == 9:
+            digits = f"967{digits}"
+        elif digits.startswith("00967"):
+            digits = digits[2:]
+        if len(digits) < 9:
+            return None
+        return f"https://wa.me/{digits}?text={quote(message)}"
+
+    forty_eight_hours_ahead = today + timedelta(days=2)
+
+    flight_stmt = (
+        select(FlightBookingDetail, Booking)
+        .join(Booking, FlightBookingDetail.booking_id == Booking.id)
+        .where(
+            Booking.status != BookingStatus.CANCELLED,
+            FlightBookingDetail.departure_date >= today,
+            FlightBookingDetail.departure_date <= forty_eight_hours_ahead,
+        )
+        .order_by(FlightBookingDetail.departure_date.asc())
+        .limit(10)
+    )
+    if current_user.role == UserRole.EMPLOYEE:
+        flight_stmt = flight_stmt.where(Booking.employee_id == current_user.id)
+
+    for fd, b in (await db.execute(flight_stmt)).all():
+        msg = (
+            f"تذكير بموعد رحلتك الجوية رقم {b.ticket_number} "
+            f"من {fd.departure_airport} إلى {fd.arrival_airport} "
+            f"بتاريخ {fd.departure_date} الساعة {fd.departure_time}."
+        )
+        alerts.append({
+            "type": "departure",
+            "severity": "medium",
+            "title": f"رحلة طيران قريبة خلال 48 ساعة: {fd.passenger_name}",
+            "description": f"الموعد: {fd.departure_date} {fd.departure_time} - تذكرة {b.ticket_number}",
+            "entity_id": b.id,
+            "phone": fd.passenger_phone,
+            "whatsapp_url": _build_whatsapp_url(fd.passenger_phone, msg),
+        })
+
+    transport_stmt = (
+        select(TransportBookingDetail, Booking)
+        .join(Booking, TransportBookingDetail.booking_id == Booking.id)
+        .where(
+            Booking.status != BookingStatus.CANCELLED,
+            TransportBookingDetail.travel_date >= today,
+            TransportBookingDetail.travel_date <= forty_eight_hours_ahead,
+        )
+        .order_by(TransportBookingDetail.travel_date.asc())
+        .limit(10)
+    )
+    if current_user.role == UserRole.EMPLOYEE:
+        transport_stmt = transport_stmt.where(Booking.employee_id == current_user.id)
+
+    for td, b in (await db.execute(transport_stmt)).all():
+        msg = (
+            f"تذكير بموعد رحلتك البرية رقم {b.ticket_number} "
+            f"من {td.departure_station} إلى {td.arrival_station} "
+            f"بتاريخ {td.travel_date} الساعة {td.travel_time}."
+        )
+        alerts.append({
+            "type": "departure",
+            "severity": "medium",
+            "title": f"رحلة نقل بري خلال 48 ساعة: {td.passenger_name}",
+            "description": f"الموعد: {td.travel_date} {td.travel_time} - تذكرة {b.ticket_number}",
+            "entity_id": b.id,
+            "phone": td.passenger_phone,
+            "whatsapp_url": _build_whatsapp_url(td.passenger_phone, msg),
+        })
 
     return alerts

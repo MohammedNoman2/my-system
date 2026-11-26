@@ -281,7 +281,7 @@
 - **تشديد مطابقة العملاء وفصل المسافرين المستقلين في `backend/app/api/routes/bookings.py`**:
   - تحديث دالة `_names_compatible` بحيث تتطلب عند المطابقة بالهاتف تطابقاً تاماً لجميع أجزاء الاسم (الأول + الثاني + الثالث + اللقب) دون دمج خاطئ لأشخاص مختلفين يشتركون في نفس الهاتف، بينما تسمح فقط عند تطابق الهوية/الجواز بكون أحد الاسمين امتداداً للآخر بنفس الاسم الأول.
   - تعزيز حلقة المطابقة بالهاتف للتحقق من عدم وجود تعارض في رقم الجواز أو الهوية الوطنية قبل الربط.
-  - فصل المسافرين المستقلين في دفعات `create_transport_batch` و `create_multi_booking_batch` بتمرير `customer_id=data.customer_id if idx == 0 else None` لضمان إنشاء سجل عميل مستقل لبقية المسافرين في الدفعة.
+  - فصل المسافرين المستقلين في دفعات `create_transport_batch` و `create_multi_booking_batch` بتمرير `customer_id=data.customer_id if idx == 0 else None` بحيث يرتبط حساب العميل المختار بالمقعد/المسافر الأول فقط وتُنشأ حسابات مستقلة لبقية المسافرين.
 - **ضبط التذكرة الحرارية الأفقية في صفحة واحدة وإزالة الإطار المزدوج للشعار في `backend/app/services/print_service.py`**:
   - تحديث `build_cell_html` و `build_field_table_html` لإضافة وضع `is_thermal` بمقاسات مضغوطة وتثبيت تخطيط الجدول (`table-layout: fixed`).
   - ضبط تنسيق `generate_voucher_html` لتتناسب التذكرة الحرارية (`80mm × 60mm` أفقياً) داخل صفحة واحدة دون انقسام، وإزالة الإطار المزدوج حول الشعار (`border: none`).
@@ -301,9 +301,29 @@
   - اجتياز بناء الواجهة الأمامية `npm run build` بنجاح كامل.
   - خلو جميع الملفات من بايتات `UTF-8 BOM`.
 
-## Current Project Status (الحالة المعتمدة بعد إتمام الدفعة 5-B4)
-- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`, `Stage 5-A1`, `Stage 5-A2`, `Stage 5-A3`, `Stage 5-A4`, `Stage 5-A5`, `Stage 5-B`, `Stage 5-B2`, `Stage 5-B3`, `Stage 5-B4`.
-- **بوابات التحقق الآلي**: اجتياز حزمة `pytest` الموحدة (23 اختباراً شاملاً لكافة المراحل المحاسبية والأمنية وتكامل القنوات وتعدد عملات الورديات وقفل الفترة والمطابقة اليومية وتعدد تخصيصات التذاكر وترقيات النقل البري وتعدد مسافري الطيران وتصنيف الفئات والاسم الثلاثي واللقب واشتقاق أسعار الصرف الحية من الخادم وتشديد مطابقة العملاء وطباعة الدفعة والتذكرة الحرارية الأفقية) بنسبة 100%، وتطبيق ترحيل Alembic بنجاح (`f2a3b4c5d6e7 (head)`), وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`npm run build`).
+## Stage 5-C Completed: Passport Issuing Office & 24-48h Tracking, 48h Departure WhatsApp Alerts, Audit Log Filters & Login Rate Limit (المرحلة 5-C)
+- **مكتب إصدار الجوازات وحالة المتابعة (24–48 ساعة) وترحيل Alembic (`a3b4c5d6e7f8`)**:
+  - إضافة عمود `issuing_office` لنموذج الجوازات [passport.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/models/booking_details/passport.py) وإنشاء وتطبيق ترحيل Alembic الرسمي [a3b4c5d6e7f8_stage_5c_passport_issuing_office.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/alembic/versions/a3b4c5d6e7f8_stage_5c_passport_issuing_office.py) المتفرع من `f2a3b4c5d6e7`.
+  - إضافة دالة `compute_passport_24_48_status` والحقول المحسوبة (`processing_status_code`, `processing_status_label`) في [booking.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/schemas/booking.py) لتصنيف معاملات الجوازات حسب يوم التقديم (`under_24h`, `within_48h`, `over_48h`).
+  - حفظ `issuing_office` عند إنشاء معاملات الجوازات في [bookings.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/api/routes/bookings.py) وإضافة حقل الإدخال في [PassportBookingForm.tsx](file:///c:/Users/Mohammed/Desktop/my-system/frontend/src/components/booking/PassportBookingForm.tsx).
+- **تقرير متابعة الجوازات (`passport_tracking`)**:
+  - إضافة تقرير `passport_tracking` في [reports.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/api/routes/reports.py) لعرض معاملات الجوازات مع مكتب الإصدار وحالة المتابعة وإحصاءاتها.
+  - إضافة بطاقة التقرير في واجهة [ReportsPage.tsx](file:///c:/Users/Mohammed/Desktop/my-system/frontend/src/pages/reports/ReportsPage.tsx).
+- **تنبيهات السفر خلال 48 ساعة وروابط واتساب (`wa.me`)**:
+  - ترقية مسار `/dashboard/alerts` في [dashboard.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/api/routes/dashboard.py) لإصدار تنبيهات رحلات الطيران والنقل البري المقررة خلال 48 ساعة القادمة مع تطبيع أرقام الهواتف اليمنية وبناء روابط تذكير واتساب (`https://wa.me/...`).
+  - تحديث واجهة [DashboardPage.tsx](file:///c:/Users/Mohammed/Desktop/my-system/frontend/src/pages/dashboard/DashboardPage.tsx) لإظهار زر **تذكير واتساب** وشارة **رحلة قريبة**.
+- **فلاتر سجل التدقيق الأمني وتشديد حماية تسجيل الدخول**:
+  - إضافة فلاتر (`action`, `table_name`, `date_from`, `date_to`, `search`) لمسار `/settings/audit-logs` في [settings.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/api/routes/settings.py) وربطها بشريط الفلاتر في [SettingsPage.tsx](file:///c:/Users/Mohammed/Desktop/my-system/frontend/src/pages/settings/SettingsPage.tsx).
+  - تشديد تقييد معدل محاولات تسجيل الدخول بالذاكرة في [auth.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/api/routes/auth.py) إلى `10/minute` وإضافة معالج الاستثناء العربي `arabic_rate_limit_handler` برمز `429` في [main.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/main.py).
+- **اختبارات التحقق الآلي الكاملة**:
+  - تحديث فحص رأس Alembic في ملفات الاختبارات لقبول الترحيل الجديد `a3b4c5d6e7f8`.
+  - إنشاء ملف الاختبار [test_stage5_c.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/tests/test_stage5_c.py) للتحقق من مكتب الإصدار وحالة 24–48 ساعة وتقرير الجوازات وتنبيهات السفر وواتساب وفلاتر التدقيق ومعالج 429 العربي.
+  - اجتياز جناح `pytest -v` بالكامل بنسبة 100% (**24 اختباراً ناجحاً من أصل 24**).
+  - اجتياز فحص TypeScript `npx tsc --noEmit` وبناء الواجهة الأمامية `npm run build` بنجاح كامل، وخلو جميع الملفات من بايتات `UTF-8 BOM`.
+
+## Current Project Status (الحالة المعتمدة بعد إتمام المرحلة 5-C)
+- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`, `Stage 5-A1`, `Stage 5-A2`, `Stage 5-A3`, `Stage 5-A4`, `Stage 5-A5`, `Stage 5-B`, `Stage 5-B2`, `Stage 5-B3`, `Stage 5-B4`, `Stage 5-C`.
+- **بوابات التحقق الآلي**: اجتياز حزمة `pytest` الموحدة (24 اختباراً شاملاً لكافة المراحل المحاسبية والأمنية وتكامل القنوات وتعدد عملات الورديات وقفل الفترة والمطابقة اليومية وتعدد تخصيصات التذاكر وترقيات النقل البري وتعدد مسافري الطيران وتصنيف الفئات والاسم الثلاثي واللقب واشتقاق أسعار الصرف الحية من الخادم وتشديد مطابقة العملاء وطباعة الدفعة والتذكرة الحرارية الأفقية ومكتب الجوازات وتنبيهات السفر وواتساب وفلاتر التدقيق وحماية تسجيل الدخول) بنسبة 100%، وتطبيق ترحيل Alembic بنجاح (`a3b4c5d6e7f8 (head)`), وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`npm run build`).
 
 
 

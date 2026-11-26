@@ -81,6 +81,12 @@ const ALL_REPORTS: ReportTab[] = [
     icon: <BookOpen className="w-4 h-4 text-emerald-600" />,
   },
   {
+    id: 'passport_tracking',
+    title: 'تقرير متابعة الجوازات (24–48 ساعة)',
+    description: 'رصد معاملات الجوازات حسب مكتب الإصدار وحالة الإنجاز حسب يوم التقديم (أقل من 24 ساعة / 24–48 ساعة / +48 ساعة)',
+    icon: <FileText className="w-4 h-4 text-teal-600" />,
+  },
+  {
     id: 'ledger',
     title: 'كشف حساب',
     description: 'كشف حساب مالي تفصيلي للعملاء والموردين متعدد العملات',

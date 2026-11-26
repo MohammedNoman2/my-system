@@ -393,6 +393,7 @@ async def _create_booking_core(
             booking_id=booking.id,
             passport_type=data.passport_details.passport_type,
             priority=data.passport_details.priority,
+            issuing_office=(data.passport_details.issuing_office or "").strip() or None,
             application_date=data.passport_details.application_date,
             expected_delivery_date=data.passport_details.expected_delivery_date,
             applicant_name=data.passport_details.applicant_name,

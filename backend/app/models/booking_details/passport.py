@@ -34,6 +34,7 @@ class PassportBookingDetail(Base):
         default=PassportPriority.NORMAL,
         nullable=False,
     )
+    issuing_office: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     application_date: Mapped[date] = mapped_column(Date, nullable=False)
     expected_delivery_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     applicant_name: Mapped[str] = mapped_column(String(100), nullable=False)

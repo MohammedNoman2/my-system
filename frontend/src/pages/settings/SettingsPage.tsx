@@ -148,10 +148,24 @@ export function SettingsPage() {
     }
   };
 
+  const [auditFilters, setAuditFilters] = useState({
+    action: '',
+    table_name: '',
+    date_from: '',
+    date_to: '',
+    search: '',
+  });
+
   const fetchAuditLogs = async () => {
     setIsLoadingLogs(true);
     try {
-      const res = await api.get('/settings/audit-logs');
+      const params: Record<string, string> = {};
+      if (auditFilters.action) params.action = auditFilters.action;
+      if (auditFilters.table_name.trim()) params.table_name = auditFilters.table_name.trim();
+      if (auditFilters.date_from) params.date_from = auditFilters.date_from;
+      if (auditFilters.date_to) params.date_to = auditFilters.date_to;
+      if (auditFilters.search.trim()) params.search = auditFilters.search.trim();
+      const res = await api.get('/settings/audit-logs', { params });
       setLogs(res.data);
     } catch (err) {
       console.error('Failed to load audit logs', err);
@@ -641,6 +655,48 @@ export function SettingsPage() {
             </button>
           </CardHeader>
           <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2 mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <select
+                value={auditFilters.action}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, action: e.target.value }))}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+              >
+                <option value="">كل الإجراءات</option>
+                <option value="INSERT">إضافة (INSERT)</option>
+                <option value="UPDATE">تعديل (UPDATE)</option>
+                <option value="DELETE">حذف (DELETE)</option>
+                <option value="VOID">إلغاء سند (VOID)</option>
+              </select>
+              <input
+                type="text"
+                placeholder="الجدول (bookings, finance...)"
+                value={auditFilters.table_name}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, table_name: e.target.value }))}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+              />
+              <input
+                type="date"
+                value={auditFilters.date_from}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, date_from: e.target.value }))}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+              />
+              <input
+                type="date"
+                value={auditFilters.date_to}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, date_to: e.target.value }))}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+              />
+              <input
+                type="text"
+                placeholder="بحث (مستخدم أو IP)..."
+                value={auditFilters.search}
+                onChange={(e) => setAuditFilters((prev) => ({ ...prev, search: e.target.value }))}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+              />
+              <Button type="button" size="sm" onClick={fetchAuditLogs}>
+                تطبيق الفلتر
+              </Button>
+            </div>
             {isLoadingLogs ? (
               <div className="py-8"><Spinner size="md" /></div>
             ) : (

@@ -231,17 +231,27 @@ export function DashboardPage() {
             <span>تنبيهات هامة تستوجب المتابعة ({alerts.length})</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
-            {alerts.slice(0, 4).map((alert, idx) => (
+            {alerts.slice(0, 6).map((alert, idx) => (
               <div
                 key={idx}
-                className="p-3 bg-white rounded-lg border border-amber-100 shadow-2xs flex items-start justify-between text-xs"
+                className="p-3 bg-white rounded-lg border border-amber-100 shadow-2xs flex items-start justify-between gap-2 text-xs"
               >
                 <div>
                   <p className="font-bold text-slate-800">{alert.title}</p>
                   <p className="text-slate-500 mt-0.5">{alert.description}</p>
+                  {alert.whatsapp_url && (
+                    <a
+                      href={alert.whatsapp_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold hover:bg-emerald-100 transition-colors"
+                    >
+                      تذكير واتساب
+                    </a>
+                  )}
                 </div>
                 <span className="px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-800 shrink-0 mr-2">
-                  {alert.type === 'debt' ? 'مديونية' : 'جواز'}
+                  {alert.type === 'debt' ? 'مديونية' : alert.type === 'departure' ? 'رحلة قريبة' : 'جواز'}
                 </span>
               </div>
             ))}

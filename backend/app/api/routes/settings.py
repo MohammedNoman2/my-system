@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -385,16 +385,37 @@ async def reset_user_password(
 async def list_audit_logs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    action: Optional[str] = Query(None),
+    table_name: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
         select(AuditLog, User.username, User.full_name)
         .outerjoin(User, AuditLog.user_id == User.id)
-        .order_by(desc(AuditLog.timestamp))
-        .offset(offset)
-        .limit(limit)
     )
+    if action and action.strip():
+        stmt = stmt.where(AuditLog.action == action.strip().upper())
+    if table_name and table_name.strip():
+        stmt = stmt.where(AuditLog.table_name.ilike(f"%{table_name.strip()}%"))
+    if date_from:
+        start_utc = datetime.combine(date_from, time.min) - timedelta(hours=3)
+        stmt = stmt.where(AuditLog.timestamp >= start_utc)
+    if date_to:
+        end_utc_exclusive = datetime.combine(date_to + timedelta(days=1), time.min) - timedelta(hours=3)
+        stmt = stmt.where(AuditLog.timestamp < end_utc_exclusive)
+    if search and search.strip():
+        q = f"%{search.strip()}%"
+        stmt = stmt.where(
+            (User.username.ilike(q))
+            | (User.full_name.ilike(q))
+            | (AuditLog.table_name.ilike(q))
+            | (AuditLog.ip_address.ilike(q))
+        )
+    stmt = stmt.order_by(desc(AuditLog.timestamp)).offset(offset).limit(limit)
     res = await db.execute(stmt)
     rows = res.all()
     return [

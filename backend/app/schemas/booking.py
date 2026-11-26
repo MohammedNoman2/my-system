@@ -1,7 +1,8 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
+from app.core.config import office_today
 from app.models.booking import BookingStatus, BookingType
 from app.models.booking_details.flight import FlightTicketType
 from app.models.booking_details.passport import PassportPriority, PassportType
@@ -235,9 +236,20 @@ class VisaDetailCreate(BaseModel):
         return self
 
 
+def compute_passport_24_48_status(application_date: date, ref_date: Optional[date] = None) -> tuple[str, str]:
+    today = ref_date or office_today()
+    days = (today - application_date).days
+    if days <= 0:
+        return "under_24h", "قيد المراجعة (أقل من 24 ساعة)"
+    if days == 1:
+        return "within_48h", "تحت الإجراء (24–48 ساعة)"
+    return "over_48h", "جاهز للمتابعة / التسليم (+48 ساعة)"
+
+
 class PassportDetailCreate(BaseModel):
     passport_type: PassportType = PassportType.NEW
     priority: PassportPriority = PassportPriority.NORMAL
+    issuing_office: Optional[str] = None
     application_date: date
     expected_delivery_date: Optional[date] = None
     applicant_name: Optional[str] = None
@@ -441,6 +453,7 @@ class VisaDetailResponse(BaseModel):
 class PassportDetailResponse(BaseModel):
     passport_type: PassportType
     priority: PassportPriority
+    issuing_office: Optional[str] = None
     application_date: date
     expected_delivery_date: Optional[date] = None
     applicant_name: str
@@ -451,6 +464,16 @@ class PassportDetailResponse(BaseModel):
     birth_date: date
     birth_place: str
     id_image_url: Optional[str] = None
+
+    @computed_field
+    @property
+    def processing_status_code(self) -> str:
+        return compute_passport_24_48_status(self.application_date)[0]
+
+    @computed_field
+    @property
+    def processing_status_label(self) -> str:
+        return compute_passport_24_48_status(self.application_date)[1]
 
     class Config:
         from_attributes = True

@@ -10,6 +10,8 @@ from app.core.config import format_office_dt, office_date_range_utc, office_toda
 from app.core.database import get_db
 from app.models.accounting import Account, EntityAccountType, JournalEntry, JournalEntryLine
 from app.models.booking import Booking, BookingStatus, BookingType
+from app.models.booking_details.passport import PassportBookingDetail
+from app.schemas.booking import compute_passport_24_48_status
 from app.models.cash_shift import CashShift
 from app.models.customer import Customer
 from app.models.financial import FinancialTransaction, PaymentMethod, TransactionType
@@ -648,6 +650,46 @@ async def build_report(filters: ReportFilter, current_user: User, db: AsyncSessi
             total_amount=total_net_yer,
             totals_by_currency=totals_by_curr,
             additional_totals={"shifts_count": len(shifts), "channels": totals_by_curr},
+            rows=rows,
+        )
+
+    elif filters.report_type == "passport_tracking":
+        stmt = (
+            select(Booking, PassportBookingDetail)
+            .join(PassportBookingDetail, PassportBookingDetail.booking_id == Booking.id)
+            .where(Booking.type == BookingType.PASSPORT)
+            .order_by(PassportBookingDetail.application_date.desc(), Booking.id.desc())
+        )
+        if filters.start_date:
+            stmt = stmt.where(PassportBookingDetail.application_date >= filters.start_date)
+        if filters.end_date:
+            stmt = stmt.where(PassportBookingDetail.application_date <= filters.end_date)
+        if current_user.role == UserRole.EMPLOYEE:
+            stmt = stmt.where(Booking.employee_id == current_user.id)
+
+        rows = []
+        status_counts = {"under_24h": 0, "within_48h": 0, "over_48h": 0}
+        for b, pd in (await db.execute(stmt)).all():
+            code, label = compute_passport_24_48_status(pd.application_date)
+            status_counts[code] = status_counts.get(code, 0) + 1
+            rows.append({
+                "رقم التذكرة": b.ticket_number,
+                "اسم المتقدم": pd.applicant_name,
+                "رقم الهاتف": pd.applicant_phone,
+                "مكتب الإصدار": pd.issuing_office or "--",
+                "تاريخ التقديم": pd.application_date.isoformat(),
+                "التسليم المتوقع": pd.expected_delivery_date.isoformat() if pd.expected_delivery_date else "--",
+                "حالة المتابعة (24–48 ساعة)": label,
+            })
+
+        return ReportSummary(
+            title="تقرير متابعة معاملات الجوازات (24–48 ساعة)",
+            report_type="passport_tracking",
+            period=f"{filters.start_date or 'البداية'} إلى {filters.end_date or 'اليوم'}",
+            total_count=len(rows),
+            total_amount=0.0,
+            totals_by_currency={},
+            additional_totals=status_counts,
             rows=rows,
         )
 
