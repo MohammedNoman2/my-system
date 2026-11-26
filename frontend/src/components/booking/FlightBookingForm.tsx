@@ -503,7 +503,15 @@ export function FlightBookingForm({ onSuccess, onCancel }: FlightBookingFormProp
                             type="number"
                             step="0.01"
                             value={categoryCosts[cat]}
-                            onChange={(e) => setCategoryCosts({ ...categoryCosts, [cat]: e.target.value })}
+                            onChange={(e) => {
+                              const next = { ...categoryCosts, [cat]: e.target.value };
+                              setCategoryCosts(next);
+                              const sumCost = (['adult', 'child', 'infant'] as FlightCategory[]).reduce(
+                                (acc, k) => acc + categoryCounts[k] * (parseFloat(next[k] || '0') || 0),
+                                0
+                              );
+                              setValue('cost_price', Number(sumCost.toFixed(2)));
+                            }}
                           />
                         )}
                       </div>

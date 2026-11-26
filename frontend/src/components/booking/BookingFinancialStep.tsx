@@ -36,15 +36,20 @@ export function BookingFinancialStep({ form, selectedCustomer, passengerCount = 
     watch('passenger_name') || watch('applicant_name') || watch('sender_name') || '';
 
   const availableCredit = Number(creditBalances[currency] || 0);
-  // في حالة الآجل (deferred) يكون المدفوع 0، لكن يمكن للرصيد الدائن أن يغطي جزءاً أو كلاً من السعر
+  // الخادم يخصم الرصيد الدائن المتاح أولاً من سعر البيع، ثم يُسدّد المتبقي نقداً/بنكياً/آجلاً
   const effectivePaid = paymentMethod === 'deferred' ? 0 : paidAmount;
   const creditApplied = useCreditBalance
-    ? Math.min(availableCredit, Math.max(0, sellingPrice - effectivePaid))
+    ? Math.min(availableCredit, sellingPrice)
     : 0;
+  const remainingAfterCredit = Math.max(
+    0,
+    Number((sellingPrice - creditApplied).toFixed(2))
+  );
   const remainingAmount = Math.max(
     0,
-    Number((sellingPrice - effectivePaid - creditApplied).toFixed(2))
+    Number((remainingAfterCredit - effectivePaid).toFixed(2))
   );
+  const cashExceedsAfterCredit = paymentMethod !== 'deferred' && effectivePaid > remainingAfterCredit + 0.01;
 
   // Initialize use_credit_balance and payment_method if unset
   useEffect(() => {
@@ -236,7 +241,12 @@ export function BookingFinancialStep({ form, selectedCustomer, passengerCount = 
                 {...register('paid_amount', {
                   min: { value: 0, message: 'لا يمكن أن تكون سالبة' }
                 })}
-                error={errors.paid_amount?.message as string}
+                error={
+                  (errors.paid_amount?.message as string) ||
+                  (cashExceedsAfterCredit
+                    ? `المبلغ يتجاوز المتبقي بعد الرصيد الدائن (${remainingAfterCredit.toLocaleString()} ${currency}). ألغِ تفعيل خصم الرصيد الدائن إذا أردت دفع كامل المبلغ نقداً.`
+                    : undefined)
+                }
               />
             )}
 
