@@ -14,6 +14,8 @@ import {
   Pencil,
   Power,
   KeyRound,
+  Database,
+  Download,
 } from 'lucide-react';
 import api from '../../services/api';
 import { useSettingsStore } from '../../context/settingsStore';
@@ -156,6 +158,35 @@ export function SettingsPage() {
     search: '',
   });
 
+  const [backups, setBackups] = useState<Array<{ filename: string; size_bytes: number; created_at?: string }>>([]);
+  const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+  const [isCreatingBackup, setIsCreatingBackup] = useState(false);
+
+  const fetchBackups = async () => {
+    setIsLoadingBackups(true);
+    try {
+      const res = await api.get('/settings/backups');
+      setBackups(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to load backups', err);
+    } finally {
+      setIsLoadingBackups(false);
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    setIsCreatingBackup(true);
+    try {
+      const res = await api.post('/settings/backup');
+      addToast(`تم إنشاء النسخة الاحتياطية بنجاح: ${res.data?.filename || ''}`, 'success');
+      fetchBackups();
+    } catch (err: any) {
+      addToast(err.response?.data?.detail || 'فشل إنشاء النسخة الاحتياطية', 'error');
+    } finally {
+      setIsCreatingBackup(false);
+    }
+  };
+
   const fetchAuditLogs = async () => {
     setIsLoadingLogs(true);
     try {
@@ -172,6 +203,7 @@ export function SettingsPage() {
     } finally {
       setIsLoadingLogs(false);
     }
+    fetchBackups();
   };
 
   const handleLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -723,6 +755,63 @@ export function SettingsPage() {
                         <td className="px-4 py-2.5 font-bold text-[#1e3a8a]">{log.action}</td>
                         <td className="px-4 py-2.5 text-slate-600 font-mono">{log.table_name}</td>
                         <td className="px-4 py-2.5 font-mono text-slate-400">{log.ip_address || '--'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {activeTab === 'audit' && (
+        <Card className="mt-4">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Database className="w-4 h-4 text-[#1e3a8a]" />
+              النسخ الاحتياطي لقاعدة البيانات
+            </CardTitle>
+            <Button
+              type="button"
+              size="sm"
+              isLoading={isCreatingBackup}
+              onClick={handleCreateBackup}
+            >
+              إنشاء نسخة احتياطية الآن
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {isLoadingBackups ? (
+              <div className="py-4"><Spinner size="sm" /></div>
+            ) : backups.length === 0 ? (
+              <p className="text-xs text-slate-500">لا توجد نسخ احتياطية مسجلة حالياً.</p>
+            ) : (
+              <div className="overflow-x-auto max-h-[40vh]">
+                <table className="w-full text-right text-xs sm:text-sm">
+                  <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-2.5">اسم الملف</th>
+                      <th className="px-4 py-2.5">الحجم</th>
+                      <th className="px-4 py-2.5">إجراء</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {backups.map((b) => (
+                      <tr key={b.filename} className="hover:bg-slate-50/80">
+                        <td className="px-4 py-2 font-mono text-slate-800">{b.filename}</td>
+                        <td className="px-4 py-2 text-slate-500">
+                          {(Number(b.size_bytes || 0) / 1024).toFixed(1)} KB
+                        </td>
+                        <td className="px-4 py-2">
+                          <a
+                            href={`/api/settings/backups/${encodeURIComponent(b.filename)}/download`}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-[#1e3a8a] hover:underline"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            تنزيل
+                          </a>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -29,9 +29,9 @@ export function Navbar() {
         </button>
 
         <div className="flex items-center gap-2">
-          {office?.logo_image_url ? (
+          {(office?.logo_data || office?.logo_image_url) ? (
             <img
-              src={office.logo_image_url}
+              src={office.logo_data || office.logo_image_url || undefined}
               alt={office.office_name}
               className="h-8 w-auto object-contain"
             />
