@@ -7,7 +7,6 @@ sqlalchemy[asyncio]>=2.0.28
 asyncpg>=0.29.0
 aiosqlite>=0.20.0
 greenlet>=3.0.3
-passlib[bcrypt]>=1.7.4
 bcrypt>=4.1.2
 PyJWT>=2.9.0
 cryptography>=42.0.0

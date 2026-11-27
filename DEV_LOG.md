@@ -321,9 +321,29 @@
   - اجتياز جناح `pytest -v` بالكامل بنسبة 100% (**24 اختباراً ناجحاً من أصل 24**).
   - اجتياز فحص TypeScript `npx tsc --noEmit` وبناء الواجهة الأمامية `npm run build` بنجاح كامل، وخلو جميع الملفات من بايتات `UTF-8 BOM`.
 
-## Current Project Status (الحالة المعتمدة بعد إتمام المرحلة 5-C)
-- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`, `Stage 5-A1`, `Stage 5-A2`, `Stage 5-A3`, `Stage 5-A4`, `Stage 5-A5`, `Stage 5-B`, `Stage 5-B2`, `Stage 5-B3`, `Stage 5-B4`, `Stage 5-C`.
-- **بوابات التحقق الآلي**: اجتياز حزمة `pytest` الموحدة (24 اختباراً شاملاً لكافة المراحل المحاسبية والأمنية وتكامل القنوات وتعدد عملات الورديات وقفل الفترة والمطابقة اليومية وتعدد تخصيصات التذاكر وترقيات النقل البري وتعدد مسافري الطيران وتصنيف الفئات والاسم الثلاثي واللقب واشتقاق أسعار الصرف الحية من الخادم وتشديد مطابقة العملاء وطباعة الدفعة والتذكرة الحرارية الأفقية ومكتب الجوازات وتنبيهات السفر وواتساب وفلاتر التدقيق وحماية تسجيل الدخول) بنسبة 100%، وتطبيق ترحيل Alembic بنجاح (`a3b4c5d6e7f8 (head)`), وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`npm run build`).
+## Stage 6-A Completed: Dead Code/Dependency Cleanup, Redis-Aware Rate Limiter & Real 429 Login Test (الدفعة 6-A)
+- **تنظيف الملفات المؤقتة واليتيمة والاختبارات المهملة**:
+  - أخذ نسخة احتياطية آمنة عبر `backend/scripts/backup_db.py` (`arp_sqlite_backup_20261127_224601.db.gz`).
+  - حذف ملفات النسخ الاحتياطية القديمة غير المضغوطة (`backend/arp.db.pre_stage4a.bak`, `backend/arp.db.pre_stage4b.bak`, `backend/arp.db.pre_stage4c.bak`) ومجلد `uploads` الفارغ في الجذر.
+  - حذف الملفات البرمجية اليتيمة والاختبارات اليدوية المهملة عبر `git rm -f`:
+    - [BookingList.tsx](file:///c:/Users/Mohammed/Desktop/my-system/frontend/src/components/booking/BookingList.tsx) (محذوف)
+    - `frontend/src/components/common/index.ts` (محذوف)
+    - `backend/tests/check_db.py` (محذوف)
+    - `backend/tests/test_full_audit.py` (محذوف)
+    - `backend/tests/test_point1_and_print.py` (محذوف)
+- **تنظيف الاعتماديات المهملة**:
+  - إزالة `passlib[bcrypt]>=1.7.4` غير المستخدمة من [requirements.txt](file:///c:/Users/Mohammed/Desktop/my-system/backend/requirements.txt) مع الإبقاء على `bcrypt>=4.1.2`.
+- **دعم Redis تلقائياً لمحدّد معدل الطلبات (`Rate Limiter`)**:
+  - تحديث [rate_limit.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/app/middleware/rate_limit.py) وإضافة `resolve_rate_limit_storage_uri()` لاختيار `RATE_LIMIT_STORAGE_URI` أو `REDIS_URL` في الإنتاج (عند تحقق الاتصال بـ Redis) مع التراجع التلقائي الآمن إلى `memory://` محلياً وتفعيل `in_memory_fallback_enabled=True`.
+- **اختبار حقيقي لحد معدل محاولات تسجيل الدخول (`10/minute -> 429`)**:
+  - إنشاء ملف الاختبار [test_stage6_a.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/tests/test_stage6_a.py) للتحقق من `resolve_rate_limit_storage_uri()` ومن إطلاق رمز `429` حقيقي مع رسالة الخطأ العربية على المحاولة الحادية عشرة المتتالية إلى `/api/auth/login`.
+- **اختبارات التحقق الآلي الكاملة**:
+  - اجتياز جناح `pytest -v` بالكامل بنسبة 100% (**25 اختباراً ناجحاً من أصل 25**).
+  - اجتياز فحص TypeScript `npx tsc --noEmit` وبناء الواجهة الأمامية `npm run build` بنجاح كامل، وخلو الملفات المعدلة والجديدة من بايتات `UTF-8 BOM`.
+
+## Current Project Status (الحالة المعتمدة بعد إتمام الدفعة 6-A)
+- **المراحل المنجزة والمتحقق منها بالكامل**: `Step 0`, `Stage 1`, `Stage 2`, `Stage 3`, `Stage 4-A`, `Stage 4-B`, `Stage 4-C`, `Stage 4-D`, `Stage 5-A1`, `Stage 5-A2`, `Stage 5-A3`, `Stage 5-A4`, `Stage 5-A5`, `Stage 5-B`, `Stage 5-B2`, `Stage 5-B3`, `Stage 5-B4`, `Stage 5-C`, `Stage 6-A`.
+- **بوابات التحقق الآلي**: اجتياز حزمة `pytest` الموحدة (25 اختباراً شاملاً لكافة المراحل المحاسبية والأمنية وتكامل القنوات وتعدد عملات الورديات وقفل الفترة والمطابقة اليومية وتعدد تخصيصات التذاكر وترقيات النقل البري وتعدد مسافري الطيران وتصنيف الفئات والاسم الثلاثي واللقب واشتقاق أسعار الصرف الحية من الخادم وتشديد مطابقة العملاء وطباعة الدفعة والتذكرة الحرارية الأفقية ومكتب الجوازات وتنبيهات السفر وواتساب وفلاتر التدقيق وحماية تسجيل الدخول وإطلاق `429` الحقيقي مع دعم Redis) بنسبة 100%، وتطبيق ترحيل Alembic بنجاح (`a3b4c5d6e7f8 (head)`), وخلو المشروع من بايتات `UTF-8 BOM`، ونجاح بناء الواجهة الأمامية (`npm run build`).
 
 
 
