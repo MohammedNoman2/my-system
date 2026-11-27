@@ -96,7 +96,7 @@ export function TicketSearchPage() {
   const [isLoadingJournal, setIsLoadingJournal] = useState(false);
 
   const [printId, setPrintId] = useState<number | null>(null);
-  const [cancellingBooking, setCancellingBooking] = useState<{ id: number; ticket_number: string; paid_amount: number } | null>(null);
+  const [cancellingBooking, setCancellingBooking] = useState<{ id: number; ticket_number: string; paid_amount: number; currency?: string; credit_applied?: number } | null>(null);
 
   const [postponeTicket, setPostponeTicket] = useState<TicketSearchItem | null>(null);
   const [postponeDate, setPostponeDate] = useState('');
@@ -537,6 +537,8 @@ export function TicketSearchPage() {
                                       id: item.id,
                                       ticket_number: item.ticket_number,
                                       paid_amount: item.paid_amount,
+                                      currency: item.currency,
+                                      credit_applied: Number((item as any).credit_applied || 0),
                                     });
                                   }}
                                   disabled={item.status === 'cancelled'}
