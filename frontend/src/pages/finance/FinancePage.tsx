@@ -26,6 +26,11 @@ export function FinancePage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [ratesToYer, setRatesToYer] = useState<Record<string, number>>({
+    YER: 1,
+    SAR: 140,
+    USD: 533,
+  });
 
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -39,8 +44,21 @@ export function FinancePage() {
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
 
-      const res = await api.get('/finance/transactions', { params });
-      setTransactions(res.data);
+      const [txRes, ratesRes] = await Promise.all([
+        api.get('/finance/transactions', { params }),
+        api.get('/settings/exchange-rates').catch(() => ({ data: [] })),
+      ]);
+      setTransactions(txRes.data);
+
+      const rateMap: Record<string, number> = { YER: 1, SAR: 140, USD: 533 };
+      if (Array.isArray(ratesRes.data)) {
+        for (const item of ratesRes.data) {
+          if (item.to_currency === 'YER' && Number(item.rate) > 0) {
+            rateMap[String(item.from_currency).toUpperCase()] = Number(item.rate);
+          }
+        }
+      }
+      setRatesToYer(rateMap);
     } catch (err) {
       console.error('Failed to load transactions', err);
     } finally {
@@ -78,17 +96,30 @@ export function FinancePage() {
     credit: 'آجل',
   };
 
-  // Quick stats (exclude voided transactions)
+  // Quick stats grouped accurately by currency + converted to YER equivalent (exclude voided transactions)
+  const summarizeByCurrency = (items: FinancialTransaction[]) => {
+    const byCurrency: Record<string, number> = {};
+    let totalYer = 0;
+    for (const t of items) {
+      const curr = String(t.currency || 'YER').toUpperCase();
+      const amt = Number(t.amount || 0);
+      byCurrency[curr] = Number(((byCurrency[curr] || 0) + amt).toFixed(2));
+      const rate = ratesToYer[curr] || 1;
+      totalYer += amt * rate;
+    }
+    return {
+      totalYer: Number(totalYer.toFixed(2)),
+      byCurrency,
+    };
+  };
+
   const activeTransactions = transactions.filter((t) => !t.is_void);
-  const totalIn = activeTransactions
-    .filter((t) => t.type === 'payment_in')
-    .reduce((acc, t) => acc + Number(t.amount), 0);
-  const totalOut = activeTransactions
-    .filter((t) => t.type === 'payment_out')
-    .reduce((acc, t) => acc + Number(t.amount), 0);
-  const totalExpenses = activeTransactions
-    .filter((t) => t.type === 'expense')
-    .reduce((acc, t) => acc + Number(t.amount), 0);
+  const summaryIn = summarizeByCurrency(activeTransactions.filter((t) => t.type === 'payment_in'));
+  const summaryOut = summarizeByCurrency(activeTransactions.filter((t) => t.type === 'payment_out'));
+  const summaryExpenses = summarizeByCurrency(activeTransactions.filter((t) => t.type === 'expense'));
+
+  const formatMoney = (val: number) =>
+    val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="space-y-6">
@@ -131,42 +162,72 @@ export function FinancePage() {
         <Card className="border-r-4 border-r-emerald-600">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-semibold text-slate-500">
-              إجمالي المقبوضات المعروضة
+              إجمالي المقبوضات المعروضة (معادل YER)
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-black text-emerald-700">
-              {totalIn.toLocaleString()} YER
+              {formatMoney(summaryIn.totalYer)} YER
             </div>
-            <p className="text-xs text-slate-500 mt-1">سندات القبض المسجلة</p>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {Object.entries(summaryIn.byCurrency).length === 0 ? (
+                <span className="text-xs text-slate-500">سندات القبض المسجلة</span>
+              ) : (
+                Object.entries(summaryIn.byCurrency).map(([curr, amt]) => (
+                  <span key={curr} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    {formatMoney(amt)} {curr}
+                  </span>
+                ))
+              )}
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-r-4 border-r-amber-500">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-semibold text-slate-500">
-              إجمالي المدفوعات للموردين
+              إجمالي المدفوعات والصرف (معادل YER)
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-black text-amber-700">
-              {totalOut.toLocaleString()} YER
+              {formatMoney(summaryOut.totalYer)} YER
             </div>
-            <p className="text-xs text-slate-500 mt-1">سندات الصرف المسجلة</p>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {Object.entries(summaryOut.byCurrency).length === 0 ? (
+                <span className="text-xs text-slate-500">سندات الصرف المسجلة</span>
+              ) : (
+                Object.entries(summaryOut.byCurrency).map(([curr, amt]) => (
+                  <span key={curr} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
+                    {formatMoney(amt)} {curr}
+                  </span>
+                ))
+              )}
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-r-4 border-r-rose-600">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-semibold text-slate-500">
-              إجمالي المصروفات التشغيلية
+              إجمالي المصروفات التشغيلية (معادل YER)
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-black text-rose-600">
-              {totalExpenses.toLocaleString()} YER
+              {formatMoney(summaryExpenses.totalYer)} YER
             </div>
-            <p className="text-xs text-slate-500 mt-1">إيجار، كهرباء، ونثريات</p>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {Object.entries(summaryExpenses.byCurrency).length === 0 ? (
+                <span className="text-xs text-slate-500">إيجار، كهرباء، ونثريات</span>
+              ) : (
+                Object.entries(summaryExpenses.byCurrency).map(([curr, amt]) => (
+                  <span key={curr} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-800 border border-rose-200">
+                    {formatMoney(amt)} {curr}
+                  </span>
+                ))
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
