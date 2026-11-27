@@ -36,6 +36,7 @@ export function DashboardPage() {
   const { user, role } = useAuthStore();
   const [summary, setSummary] = useState<any>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -226,12 +227,23 @@ export function DashboardPage() {
       {/* Alerts Section */}
       {alerts.length > 0 && (
         <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200">
-          <div className="flex items-center gap-2 text-amber-900 font-bold text-sm mb-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>تنبيهات هامة تستوجب المتابعة ({alerts.length})</span>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>تنبيهات هامة تستوجب المتابعة ({alerts.length})</span>
+            </div>
+            {alerts.length > 6 && (
+              <button
+                type="button"
+                onClick={() => setShowAllAlerts((prev) => !prev)}
+                className="text-xs font-bold text-amber-900 bg-white border border-amber-300 px-2.5 py-1 rounded-lg hover:bg-amber-100 transition-colors"
+              >
+                {showAllAlerts ? 'عرض الأهم فقط (6)' : `عرض الكل (${alerts.length})`}
+              </button>
+            )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
-            {alerts.slice(0, 6).map((alert, idx) => (
+            {(showAllAlerts ? alerts : alerts.slice(0, 6)).map((alert, idx) => (
               <div
                 key={idx}
                 className="p-3 bg-white rounded-lg border border-amber-100 shadow-2xs flex items-start justify-between gap-2 text-xs"

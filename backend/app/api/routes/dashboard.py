@@ -288,4 +288,6 @@ async def get_dashboard_alerts(
             "whatsapp_url": _build_whatsapp_url(td.passenger_phone, msg),
         })
 
+    priority_order = {"departure": 0, "passport": 1, "debt": 2}
+    alerts.sort(key=lambda a: priority_order.get(a.get("type", ""), 9))
     return alerts
