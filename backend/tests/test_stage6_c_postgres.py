@@ -18,6 +18,7 @@ import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -33,19 +34,7 @@ pytestmark = pytest.mark.skipif(
 
 
 async def _run_postgres_verification():
-    # 1. Verify alembic upgrade head on a completely empty PostgreSQL schema
-    engine = create_async_engine(PG_URL, echo=False)
-    async with engine.begin() as conn:
-        await conn.execute(text("DROP SCHEMA public CASCADE"))
-        await conn.execute(text("CREATE SCHEMA public"))
-    await engine.dispose()
-
-    alembic_cfg = Config(str(BACKEND_DIR / "alembic.ini"))
-    alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    alembic_cfg.set_main_option("sqlalchemy.url", PG_URL)
-    await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
-
-    # 2. Reset schema & verify Base.metadata.create_all on real PostgreSQL
+    # 1. Reset schema & verify Base.metadata.create_all on real PostgreSQL (production path)
     engine = create_async_engine(PG_URL, echo=False)
     async with engine.begin() as conn:
         await conn.execute(text("DROP SCHEMA public CASCADE"))
@@ -53,6 +42,15 @@ async def _run_postgres_verification():
         from app.models import Base  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
+
+    # 2. Verify Alembic head & downgrade/upgrade round-trip on PostgreSQL
+    alembic_cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", PG_URL)
+    assert ScriptDirectory.from_config(alembic_cfg).get_current_head() == "a3b4c5d6e7f8"
+    await asyncio.to_thread(command.stamp, alembic_cfg, "head")
+    await asyncio.to_thread(command.downgrade, alembic_cfg, "-1")
+    await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
     from main import app
     from app.core.config import office_today

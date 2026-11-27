@@ -16,7 +16,8 @@
 ## Recent Changes (آخر التعديلات المنجزة)
 - **Stage 6-C (التوافق الكامل مع PostgreSQL والتحقق الآلي في CI)**:
   - إصلاح صياغة الترحيل `0dbfa8a9c1fc` (`ON CONFLICT DO NOTHING` وقيم Boolean الصريحة) لدعم PostgreSQL وSQLite معاً.
-  - إضافة اختبار [test_stage6_c_postgres.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/tests/test_stage6_c_postgres.py) لتغطية `alembic upgrade head` و`create_all` ودورة الوردية والحجز والسند والإلغاء ولوحة التحكم والتقارير التسعة كاملة على PostgreSQL (`asyncpg`).
+  - إضافة اختبار [test_stage6_c_postgres.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/tests/test_stage6_c_postgres.py) لتغطية `create_all` و`alembic stamp/downgrade/upgrade` ودورة الوردية والحجز والسند والإلغاء ولوحة التحكم والتقارير التسعة كاملة على PostgreSQL (`asyncpg`).
+  - التثبيت الإنتاجي الجديد على PostgreSQL يعتمد على `Base.metadata.create_all` في `lifespan`، بينما تُستخدم سلسلة Alembic لترقية قواعد البيانات القائمة فقط.
   - إضافة وظيفة `postgres-verification` (`postgres:16-alpine`) في [ci.yml](file:///c:/Users/Mohammed/Desktop/my-system/.github/workflows/ci.yml).
 - تم استكمال بناء "محرك كشف الحساب المتعدد العملات (Ledger v3)".
 - تم إضافة ميزات التصدير الشاملة (Excel/PDF) لكشوفات الحساب وربطها بنجاح مع `LedgerModal.tsx` و `ReportsPage.tsx`.
