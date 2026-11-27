@@ -81,53 +81,65 @@ def upgrade() -> None:
 
     # === Data Backfill for Existing Balances (Mandatory Directive 3) ===
     from datetime import datetime, timezone
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     conn = op.get_bind()
+    is_pg = conn.dialect.name == "postgresql"
+    acc_insert_sql = (
+        "INSERT INTO accounts (code, name, account_type, currency, entity_type, entity_id, is_active, created_at) "
+        "VALUES (:code, :name, :type, :curr, :ent_type, :ent_id, :is_act, :created) "
+        "ON CONFLICT (code) DO NOTHING"
+        if is_pg
+        else "INSERT OR IGNORE INTO accounts (code, name, account_type, currency, entity_type, entity_id, is_active, created_at) "
+        "VALUES (:code, :name, :type, :curr, :ent_type, :ent_id, :is_act, :created)"
+    )
+    je_insert_sql = (
+        "INSERT INTO journal_entries (entry_number, date, reference_type, reference_id, currency, exchange_rate, description, is_posted, created_at) "
+        "VALUES ('JE-OPENING-0001', :now, 'OPENING', 'INIT', 'YER', 1.0, 'قيد الأرصدة الافتتاحية السابقة للعملاء والموردين', :is_posted, :now) "
+        "ON CONFLICT (entry_number) DO NOTHING"
+        if is_pg
+        else "INSERT OR IGNORE INTO journal_entries (entry_number, date, reference_type, reference_id, currency, exchange_rate, description, is_posted, created_at) "
+        "VALUES ('JE-OPENING-0001', :now, 'OPENING', 'INIT', 'YER', 1.0, 'قيد الأرصدة الافتتاحية السابقة للعملاء والموردين', :is_posted, :now)"
+    )
 
     # 1. Initialize Default Chart of Accounts
     default_accounts = [
-        ('1101-YER', 'الصندوق الرئيسي - ريال يمني', 'ASSET', 'YER', 'NONE', None, 1),
-        ('1101-SAR', 'الصندوق الرئيسي - ريال سعودي', 'ASSET', 'SAR', 'NONE', None, 1),
-        ('1101-USD', 'الصندوق الرئيسي - دولار أمريكي', 'ASSET', 'USD', 'NONE', None, 1),
-        ('4101-YER', 'إيرادات مبيعات الحجوزات - ريال يمني', 'REVENUE', 'YER', 'NONE', None, 1),
-        ('4101-SAR', 'إيرادات مبيعات الحجوزات - ريال سعودي', 'REVENUE', 'SAR', 'NONE', None, 1),
-        ('4101-USD', 'إيرادات مبيعات الحجوزات - دولار أمريكي', 'REVENUE', 'USD', 'NONE', None, 1),
-        ('4201-YER', 'إيرادات رسوم الإلغاء - ريال يمني', 'REVENUE', 'YER', 'NONE', None, 1),
-        ('4201-SAR', 'إيرادات رسوم الإلغاء - ريال سعودي', 'REVENUE', 'SAR', 'NONE', None, 1),
-        ('4201-USD', 'إيرادات رسوم الإلغاء - دولار أمريكي', 'REVENUE', 'USD', 'NONE', None, 1),
-        ('5101-YER', 'تكلفة مبيعات الحجوزات - ريال يمني', 'EXPENSE', 'YER', 'NONE', None, 1),
-        ('5101-SAR', 'تكلفة مبيعات الحجوزات - ريال سعودي', 'EXPENSE', 'SAR', 'NONE', None, 1),
-        ('5101-USD', 'تكلفة مبيعات الحجوزات - دولار أمريكي', 'EXPENSE', 'USD', 'NONE', None, 1),
-        ('5201-YER', 'المصروفات التشغيلية - ريال يمني', 'EXPENSE', 'YER', 'NONE', None, 1),
-        ('5201-SAR', 'المصروفات التشغيلية - ريال سعودي', 'EXPENSE', 'SAR', 'NONE', None, 1),
-        ('5201-USD', 'المصروفات التشغيلية - دولار أمريكي', 'EXPENSE', 'USD', 'NONE', None, 1),
-        ('3101-YER', 'الأرباح المبقاة / رأس المال الافتتاحي - ريال يمني', 'EQUITY', 'YER', 'NONE', None, 1),
-        ('5901-YER', 'فروقات تقريب العملات (Rounding Differences)', 'EXPENSE', 'YER', 'NONE', None, 1),
+        ('1101-YER', 'الصندوق الرئيسي - ريال يمني', 'ASSET', 'YER', 'NONE', None, True),
+        ('1101-SAR', 'الصندوق الرئيسي - ريال سعودي', 'ASSET', 'SAR', 'NONE', None, True),
+        ('1101-USD', 'الصندوق الرئيسي - دولار أمريكي', 'ASSET', 'USD', 'NONE', None, True),
+        ('4101-YER', 'إيرادات مبيعات الحجوزات - ريال يمني', 'REVENUE', 'YER', 'NONE', None, True),
+        ('4101-SAR', 'إيرادات مبيعات الحجوزات - ريال سعودي', 'REVENUE', 'SAR', 'NONE', None, True),
+        ('4101-USD', 'إيرادات مبيعات الحجوزات - دولار أمريكي', 'REVENUE', 'USD', 'NONE', None, True),
+        ('4201-YER', 'إيرادات رسوم الإلغاء - ريال يمني', 'REVENUE', 'YER', 'NONE', None, True),
+        ('4201-SAR', 'إيرادات رسوم الإلغاء - ريال سعودي', 'REVENUE', 'SAR', 'NONE', None, True),
+        ('4201-USD', 'إيرادات رسوم الإلغاء - دولار أمريكي', 'REVENUE', 'USD', 'NONE', None, True),
+        ('5101-YER', 'تكلفة مبيعات الحجوزات - ريال يمني', 'EXPENSE', 'YER', 'NONE', None, True),
+        ('5101-SAR', 'تكلفة مبيعات الحجوزات - ريال سعودي', 'EXPENSE', 'SAR', 'NONE', None, True),
+        ('5101-USD', 'تكلفة مبيعات الحجوزات - دولار أمريكي', 'EXPENSE', 'USD', 'NONE', None, True),
+        ('5201-YER', 'المصروفات التشغيلية - ريال يمني', 'EXPENSE', 'YER', 'NONE', None, True),
+        ('5201-SAR', 'المصروفات التشغيلية - ريال سعودي', 'EXPENSE', 'SAR', 'NONE', None, True),
+        ('5201-USD', 'المصروفات التشغيلية - دولار أمريكي', 'EXPENSE', 'USD', 'NONE', None, True),
+        ('3101-YER', 'الأرباح المبقاة / رأس المال الافتتاحي - ريال يمني', 'EQUITY', 'YER', 'NONE', None, True),
+        ('5901-YER', 'فروقات تقريب العملات (Rounding Differences)', 'EXPENSE', 'YER', 'NONE', None, True),
     ]
 
     for code, name, acc_type, curr, ent_type, ent_id, is_act in default_accounts:
         conn.execute(
-            sa.text(
-                "INSERT OR IGNORE INTO accounts (code, name, account_type, currency, entity_type, entity_id, is_active, created_at) "
-                "VALUES (:code, :name, :type, :curr, :ent_type, :ent_id, :is_act, :created)"
-            ),
+            sa.text(acc_insert_sql),
             {"code": code, "name": name, "type": acc_type, "curr": curr, "ent_type": ent_type, "ent_id": ent_id, "is_act": is_act, "created": now_utc}
         )
 
     equity_res = conn.execute(sa.text("SELECT id FROM accounts WHERE code = '3101-YER'")).fetchone()
     equity_acc_id = equity_res[0] if equity_res else 1
 
-    # 2. Backfill Customers and Suppliers with balance != 0
-    customers = conn.execute(sa.text("SELECT id, name, balance FROM customers WHERE balance != 0")).fetchall()
-    suppliers = conn.execute(sa.text("SELECT id, name, balance FROM suppliers WHERE balance != 0")).fetchall()
+    # 2. Backfill Customers and Suppliers with balance != 0 (when base tables exist)
+    inspector = sa.inspect(conn)
+    customers = conn.execute(sa.text("SELECT id, name, balance FROM customers WHERE balance != 0")).fetchall() if inspector.has_table("customers") else []
+    suppliers = conn.execute(sa.text("SELECT id, name, balance FROM suppliers WHERE balance != 0")).fetchall() if inspector.has_table("suppliers") else []
 
     if customers or suppliers:
         conn.execute(
-            sa.text(
-                "INSERT OR IGNORE INTO journal_entries (entry_number, date, reference_type, reference_id, currency, exchange_rate, description, is_posted, created_at) "
-                "VALUES ('JE-OPENING-0001', :now, 'OPENING', 'INIT', 'YER', 1.0, 'قيد الأرصدة الافتتاحية السابقة للعملاء والموردين', 1, :now)"
-            ),
-            {"now": now_utc}
+            sa.text(je_insert_sql),
+            {"now": now_utc, "is_posted": True}
         )
         je_res = conn.execute(sa.text("SELECT id FROM journal_entries WHERE entry_number = 'JE-OPENING-0001'")).fetchone()
         je_id = je_res[0] if je_res else 1
@@ -137,11 +149,8 @@ def upgrade() -> None:
             for curr in ['YER', 'SAR', 'USD']:
                 code = f"1201-CUST-{cid}-{curr}"
                 conn.execute(
-                    sa.text(
-                        "INSERT OR IGNORE INTO accounts (code, name, account_type, currency, entity_type, entity_id, is_active, created_at) "
-                        "VALUES (:code, :name, 'ASSET', :curr, 'CUSTOMER', :cid, 1, :created)"
-                    ),
-                    {"code": code, "name": f"حساب العميل: {cname} ({curr})", "curr": curr, "cid": cid, "created": now_utc}
+                    sa.text(acc_insert_sql),
+                    {"code": code, "name": f"حساب العميل: {cname} ({curr})", "type": "ASSET", "curr": curr, "ent_type": "CUSTOMER", "ent_id": cid, "is_act": True, "created": now_utc}
                 )
             if bal_dec > 0:
                 c_acc = conn.execute(sa.text(f"SELECT id FROM accounts WHERE code = '1201-CUST-{cid}-YER'")).fetchone()
@@ -166,11 +175,8 @@ def upgrade() -> None:
             for curr in ['YER', 'SAR', 'USD']:
                 code = f"2101-SUPP-{sid}-{curr}"
                 conn.execute(
-                    sa.text(
-                        "INSERT OR IGNORE INTO accounts (code, name, account_type, currency, entity_type, entity_id, is_active, created_at) "
-                        "VALUES (:code, :name, 'LIABILITY', :curr, 'SUPPLIER', :sid, 1, :created)"
-                    ),
-                    {"code": code, "name": f"حساب المورد: {sname} ({curr})", "curr": curr, "sid": sid, "created": now_utc}
+                    sa.text(acc_insert_sql),
+                    {"code": code, "name": f"حساب المورد: {sname} ({curr})", "type": "LIABILITY", "curr": curr, "ent_type": "SUPPLIER", "ent_id": sid, "is_act": True, "created": now_utc}
                 )
             if bal_dec > 0:
                 s_acc = conn.execute(sa.text(f"SELECT id FROM accounts WHERE code = '2101-SUPP-{sid}-YER'")).fetchone()

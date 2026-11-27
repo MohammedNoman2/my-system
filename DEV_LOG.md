@@ -14,6 +14,10 @@
 - **الإجراء المتخذ**: تم التراجع الشامل (Revert) عن كافة التعديلات غير المستقرة، واستعادة الكود البرمجي بالكامل لـ `finance.py` والواجهات الأمامية للنقطة المستقرة الآمنة تماماً. المشروع الآن نظيف 100% ويعمل بلا أخطاء.
 
 ## Recent Changes (آخر التعديلات المنجزة)
+- **Stage 6-C (التوافق الكامل مع PostgreSQL والتحقق الآلي في CI)**:
+  - إصلاح صياغة الترحيل `0dbfa8a9c1fc` (`ON CONFLICT DO NOTHING` وقيم Boolean الصريحة) لدعم PostgreSQL وSQLite معاً.
+  - إضافة اختبار [test_stage6_c_postgres.py](file:///c:/Users/Mohammed/Desktop/my-system/backend/tests/test_stage6_c_postgres.py) لتغطية `alembic upgrade head` و`create_all` ودورة الوردية والحجز والسند والإلغاء ولوحة التحكم والتقارير التسعة كاملة على PostgreSQL (`asyncpg`).
+  - إضافة وظيفة `postgres-verification` (`postgres:16-alpine`) في [ci.yml](file:///c:/Users/Mohammed/Desktop/my-system/.github/workflows/ci.yml).
 - تم استكمال بناء "محرك كشف الحساب المتعدد العملات (Ledger v3)".
 - تم إضافة ميزات التصدير الشاملة (Excel/PDF) لكشوفات الحساب وربطها بنجاح مع `LedgerModal.tsx` و `ReportsPage.tsx`.
 - المسارات القديمة الخاصة بـ v2 وسندات القبض/الصرف والورديات بقيت كما هي دون المساس بها.
